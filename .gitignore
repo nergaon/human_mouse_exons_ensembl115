@@ -1,0 +1,8 @@
+*.key
+*.pub
+*.pem
+*.secret
+*.txt
+*.ssh
+id_*
+
