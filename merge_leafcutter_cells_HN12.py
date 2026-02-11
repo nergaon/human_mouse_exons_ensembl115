@@ -181,7 +181,7 @@ def main():
     # Remove columns with 'cluster' in their names
     #clusters_df = clusters_df.drop(columns=clusters_df.filter(like='cluster').columns)
     #clusters_df['cluster'] = clusters_df.apply(lambda row: get_unique_clusters(row, clusters_df), axis=1)
-    output = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/clusters_sum_table.txt'
+    output = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/clusters_sum_table_' + version + '.txt'
     clusters_df_data.to_csv(output, sep="\t")
     output_file = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/sum_table_' + version + '.txt'
     sum_df.to_csv(output_file, sep="\t")

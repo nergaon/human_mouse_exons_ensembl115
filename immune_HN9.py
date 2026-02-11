@@ -160,7 +160,7 @@ def main():
     #cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
     #cell_type_group_1 = ['Fibroblast']
     #cell_type_group_2 = ['Fibroblast']
-    clusters_input = main_dir + 'junctions_sum_' + group_1 + '_' + group_2 + '.txt' #all the ortholgs points
+    clusters_input = main_dir + 'junctions_sum_' + group_1 + '_' + group_2 + "_" + version + ".txt" #all the ortholgs points
     clusters_df = pd.read_csv(clusters_input, sep='\t', index_col=0)
     clusters_df.set_index('h_junction', inplace=True, drop=True)
     #mouse mouse
@@ -241,15 +241,6 @@ def main():
         #duplicates = cell_df[cell_df.duplicated(keep=False)]
         create_group_file(cell_dir, cell_df, group_1, group_2)
     
-    #i don't know what is this file
-    #add gene and exon data to the junctions from all the cells
-    #junction_sum = junction_index.to_frame(name='h_junction')
-    #junction_sum = junction_sum.drop_duplicates()
-    # add genomic and expression data
-    #junction_sum = pd.merge(junction_sum, clusters_df, how='left', left_index=True, right_index=True)
-    #junction_sum.set_index('h_junction', inplace=True, drop=True)
-    #output_file = main_dir + "AS_junctions_sum_" + group_1 + "_" + group_2 + ".txt"
-    #junction_sum.to_csv(output_file, sep="\t")
     output_file = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/sum_table_' + version + '.txt'
     sum_df.to_csv(output_file, sep="\t")
     return

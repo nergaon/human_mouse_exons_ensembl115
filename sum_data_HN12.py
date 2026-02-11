@@ -58,10 +58,12 @@ def main():
     unique_points = pd.DataFrame()
     count_genes = 0 #genes with cds transcripts in human and mouse
     mouse_ortologs['Remarks'] = 'no folder'
-    for i in range(0, len(mouse_ortologs)):
+    for i in mouse_ortologs.index:
+    #for i in range(0, len(mouse_ortologs)):
         if i%500 == 0:
             print(i)
         gene = mouse_ortologs['hsapiens_homolog_ensembl_gene'][i]
+        #print(gene)
         if isinstance(gene, float):
             gene = "novel_gene"
         input_h = main_dir + genes_folder + gene + "_" + str(i) + '/human_statistics.txt'

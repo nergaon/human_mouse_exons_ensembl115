@@ -156,7 +156,7 @@ def main():
         triplet_indices_m = find_triplet_indices(group,'m_junction')
         filtered_df = mark_triplet_types(filtered_df, triplet_indices_m, "m_type")
         
-    output = main_dir + 'junctions_with_type.txt'
+    output = main_dir + 'junctions_with_type_' + version + '.txt'
     filtered_df.to_csv(output, sep="\t", index=False)
     print("all junctions", len(df))
     print("express junctions", len(express_df))

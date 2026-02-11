@@ -160,7 +160,7 @@ def main():
     # main_col = 'mouse_junction'
     
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_' + group_1 + '_' + group_2 + '/'
-    sum_table_input = main_dir + 'clusters_sum_table.txt'
+    sum_table_input = main_dir + 'clusters_sum_table_' + version + '.txt'
     sum_df = pd.read_csv(sum_table_input, sep='\t',index_col=0)
     
     for one_cell in cell_type:
