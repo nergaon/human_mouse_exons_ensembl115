@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/gpfs0/tals/projects/Analysis/human_mouse_exons/scripts/ensembl115/merge_leafcutter_group1_group2_HN23.py", line 439, in <module>
+    main() 
+    ^^^^^^
+  File "/gpfs0/tals/projects/Analysis/human_mouse_exons/scripts/ensembl115/merge_leafcutter_group1_group2_HN23.py", line 397, in main
+    species = species[i]
+              ~~~~~~~^^^
+IndexError: string index out of range

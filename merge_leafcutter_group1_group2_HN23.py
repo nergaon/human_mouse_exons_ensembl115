@@ -27,7 +27,7 @@ def plot_histogram(df, species, cell, ensembl_dir):
      return
 
 def get_rows(points_df, df, col_name):
-    #get junctions with at least one point has ortholog
+    print("get junctions with at least one point has ortholog", col_name)
     print('get_rows')
     species_dict = {"h": "m", "m": "h"}
     species = col_name[-1]
@@ -336,80 +336,77 @@ def removeJuntions(orthologs_group_2, orthologs_group_1, speciesName):
         og2.set_index('h_junction', inplace=True)
     return og2
 
-def main():
-    minReads = 10 #remove junctions with less than minReads reads in all the samples
-    main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
-    #if len(sys.argv) != 2:
-    #    print("Usage: python get_input.py <value>")
-    #    sys.exit(1)
-    #version = sys.argv[1] #version of the results
-    version = "HN6"
-    ensembl_dir = main_dir + 'ensembl115/'
-    points_input = ensembl_dir + 'unique_points_' + version + '.txt' #all the ortholgs points
-    points_df = pd.read_csv(points_input, sep='\t',index_col=0)
-    #human_mouse
-    #group_1 = 'GSE115736'
-    #group_2 = 'GSE116177'
-    #species_1 = "h"
-    #species_2 = "m"
-    #human_human
-    group_1 = 'GSE115736'
-    group_2 = 'GSE60424'
-    species_1 = "h"
-    species_2 = "h"
-    group_1_input = main_dir + group_1 + "/leafcutter_0.2.9/" + group_1 + "_JSR_junction_counts.tsv"
+def readDF(group, species, main_dir, minReads, ensembl_dir, points_df, version):
+    group_input = main_dir + group + "/leafcutter_0.2.9/" + group + "_JSR_junction_counts.tsv"
     #group_1_input = main_dir + group_1 + "/leafcutter_0.2.9/" + group_1 + "_JSR_junction_counts_cuta.tsv"
-    group_1_df = pd.read_csv(group_1_input, sep='\t', index_col=0)
-    print(len(group_1_df), "junctions from ", group_1)
-    group_1_df = group_1_df[(group_1_df >= minReads).any(axis=1)]
-    group_1_df.index = group_1_df.index.map(modify_index)
-    group_1_df.columns = [col + "_" + group_1 for col in group_1_df.columns] #add sample name to col
-    print(len(group_1_df), "express junctions from ", group_1)
-    #group_1_df = group_1_df.head(2000)
-    plot_histogram(group_1_df, group_1, 'immune', ensembl_dir) #plot to choose the min JSR of all the cells
-    
-    group_2_input = main_dir + group_2 + "/leafcutter_0.2.9/" + group_2 + "_JSR_junction_counts.tsv"
-    #group_2_input = main_dir + group_2 + "/leafcutter_0.2.9/" + group_2 + "_JSR_junction_counts_cuta.tsv"
-    group_2_df = pd.read_csv(group_2_input, sep='\t', index_col=0)
-    print(len(group_2_df), "junctions from ", group_2)
-    group_2_df = group_2_df[(group_2_df >= minReads).any(axis=1)]
-    group_2_df.index = group_2_df.index.map(modify_index)
-    group_2_df.columns = [col + "_" + group_2 for col in group_2_df.columns] #add sample name to col
-    print(len(group_2_df), "express junctions from ", group_2)
-    #group_2_df = group_2_df.head(2000)
-    plot_histogram(group_2_df, group_2, 'immune', ensembl_dir) 
-    if species_1 == "h":
+    group_df = pd.read_csv(group_input, sep='\t', index_col=0)
+    print(len(group_df), "junctions from ", group)
+    group_df = group_df[(group_df >= minReads).any(axis=1)]
+    group_df.index = group_df.index.map(modify_index)
+    group_df.columns = [col + "_" + group for col in group_df.columns] #add sample name to col
+    print(len(group_df), "express junctions from ", group)
+    #group_df = group_df.head(2000)
+    plot_histogram(group_df, group, 'immune', ensembl_dir) #plot to choose the min JSR of all the cells
+
+    if species == "h":
     #get the rows that have ortholgs
-        orthologs_group_1, junction_dict_h = get_rows(points_df, group_1_df, 'position_h')
+        orthologs_group, junction_dict_h = get_rows(points_df, group_df, 'position_h')
         output_file_dict = ensembl_dir + "/junction_dict_h_" + version + ".json"        
         # Save to a file
         with open(output_file_dict, "w") as f:
             json.dump(junction_dict_h, f)
-        orthologs_group_1.index.name = 'h_junction'
-    print(len(orthologs_group_1), "orthologs junctions from ", group_1)
-    output_file = ensembl_dir + "/orthologous_junctions_" + group_1 + "_" + version + ".txt"
-    #orthologs_group_1 = pd.read_csv(output_file, sep='\t', index_col=0)
-    orthologs_group_1.to_csv(output_file, sep="\t")
-    if species_2 == "m": #mouse
-        orthologs_group_2, junction_dict_m = get_rows(points_df, group_2_df, 'position_m')
-        output_file_dict = ensembl_dir + "junction_dict_m_" + version + ".json"        
-        # Save to a file
-        with open(output_file_dict, "w") as f:
-            json.dump(junction_dict_m, f)
-        #human positions are the index        
-        orthologs_group_2['m_junction'] = orthologs_group_2.index
-        orthologs_group_2.set_index('h_junction', inplace=True)        
+        orthologs_group.index.name = 'h_junction'
+        print(len(orthologs_group), "orthologs junctions from ", group)
+        output_file = ensembl_dir + "/orthologous_junctions_" + group + "_" + version + ".txt"
+        #orthologs_group_1 = pd.read_csv(output_file, sep='\t', index_col=0)
+        orthologs_group.to_csv(output_file, sep="\t")
+        if species == "m": #mouse
+            orthologs_group, junction_dict_m = get_rows(points_df, group_df, 'position_m')
+            output_file_dict = ensembl_dir + "/junction_dict_m_" + version + ".json"        
+            # Save to a file
+            with open(output_file_dict, "w") as f:
+                json.dump(junction_dict_m, f)
+            #human positions are the index        
+            orthologs_group['m_junction'] = orthologs_group.index
+            orthologs_group.set_index('h_junction', inplace=True)        
        
-    print(len(orthologs_group_2), "orthologs junctions from ", group_2)
-    output_file = ensembl_dir + "orthologous_junctions_" + group_2 + "_" + version + ".txt"
-    orthologs_group_2.to_csv(output_file, sep="\t")
+    print(len(orthologs_group), "orthologs junctions from ", group)
+    output_file = ensembl_dir + "/orthologous_junctions_" + group + "_" + version + ".txt"
+    orthologs_group.to_csv(output_file, sep="\t")
+    return group_df, orthologs_group
+
+def main():
+    minReads = 10 #remove junctions with less than minReads reads in all the samples
+    main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
+    if len(sys.argv) != 2:
+        print("Usage: python get_input.py <value>")
+        sys.exit(1)
+    version = sys.argv[1] #version of the results
+    #version = "HN6"
+    ensembl_dir = main_dir + 'ensembl115/'
+    points_input = ensembl_dir + 'unique_points_' + version + '.txt' #all the ortholgs points
+    points_df = pd.read_csv(points_input, sep='\t',index_col=0)
+    #human_mouse
+    #groups = ['GSE115736', 'GSE116177']
+    #species = ['h', 'm']
+    #human_human
+    groups = ['GSE115736', '60424']
+    species = ['h', 'h']
+    for i in range(len(groups)):
+        group = groups[i]
+        species = species[i]
+        if i == 0:
+            group_1_df, orthologs_group_1 = readDF(group, species, main_dir, minReads, ensembl_dir, points_df, version)   
+        if i == 1:
+            group_2_df, orthologs_group_2 = readDF(group, species, main_dir, minReads, ensembl_dir, points_df, version)
 
     # Add exon data before modifications
     orthologs_group_1 = add_exon_data(orthologs_group_1.reset_index(), points_df).set_index('h_junction')
     orthologs_group_2 = add_exon_data(orthologs_group_2.reset_index(), points_df).set_index('h_junction')
 
-    orthologs_group_2 = removeJuntions(orthologs_group_2, orthologs_group_1, speciesName="m") #remove junctions that have problems in human side
-    orthologs_group_1 = removeJuntions(orthologs_group_1, orthologs_group_2, speciesName="h")
+    if species[0] != species[1]: #if the species are different, remove junctions that have problems in human side
+        orthologs_group_2 = removeJuntions(orthologs_group_2, orthologs_group_1, speciesName="m") #remove junctions that have problems in human side
+        orthologs_group_1 = removeJuntions(orthologs_group_1, orthologs_group_2, speciesName="h")
     # Select only the relevant columns from each DataFrame
     df1_selected = orthologs_group_1.reset_index()[['h_junction', 'm_junction', 'symbol_h', 'ensembl_h', 'rank_h']]
     df2_selected = orthologs_group_2.reset_index()[['h_junction', 'm_junction', 'symbol_h', 'ensembl_h', 'rank_h']]    
@@ -421,11 +418,13 @@ def main():
     #junction_sum = junction_sum.head(2000)
     junction_sum = get_exon_data(junction_sum, points_df) #add exons data
     junction_sum.reset_index(drop=True, inplace=True)
-    junction_sum_human = duplicated_junctions(junction_sum, junction_dict_h, "h") #deal with same junctions in human that are different in mouse
-    junction_sum_human_mouse = duplicated_junctions(junction_sum_human, junction_dict_m, "m") #deal with same junctions in human that are different in mouse
-    
-    merged_df = junction_sum_human_mouse.merge(group_1_df, how='left', left_on='h_junction', right_index=True)
-    merged_df = merged_df.merge(group_2_df, how='left', left_on='m_junction', right_index=True)
+    if species[0] != species[1]:
+        junction_sum_human = duplicated_junctions(junction_sum, junction_dict_h, "h") #deal with same junctions in human that are different in mouse
+        junction_sum_human_mouse = duplicated_junctions(junction_sum_human, junction_dict_m, "m") #deal with same junctions in human that are different in mouse
+        merged_df = junction_sum_human_mouse.merge(group_1_df, how='left', left_on='h_junction', right_index=True)
+        merged_df = merged_df.merge(group_2_df, how='left', left_on='m_junction', right_index=True)
+    else:
+        merged_df = group_1_df.merge(group_2_df, how='left', left_index=True, right_index=True)
     merged_df = merged_df.fillna(0)
     output_file = ensembl_dir + "junctions_sum_" + group_1 + "_" + group_2 + "_" + version + ".txt"
     merged_df.to_csv(output_file, sep="\t")
