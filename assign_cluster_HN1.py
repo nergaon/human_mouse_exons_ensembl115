@@ -70,22 +70,22 @@ def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):
     return df_result, df_result_AS
 
 def main():
-    min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
-    main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
-    #human_mouse
-    groups = ['GSE115736', 'GSE116177']
-    species = ['h', 'm']
-    #human_human
-    #groups = ['GSE115736', 'GSE60424']
-    #species = ['h', 'h']
-    #mouse_mouse
-    #groups = ['GSE116177', 'GSE180020']
-    #species = ['m', 'm']
     #if len(sys.argv) != 2:
     #    print("Usage: python get_input.py <value>")
     #    sys.exit(1)
     #version = sys.argv[1] #version of the results
     version = "HN6"
+    min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
+    main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
+    #human_mouse
+    #groups = ['GSE115736', 'GSE116177']
+    #species = ['h', 'm']
+    #human_human
+    groups = ['GSE115736', 'GSE60424']
+    species = ['h', 'h']
+    #mouse_mouse
+    #groups = ['GSE116177', 'GSE180020']
+    #species = ['m', 'm']
     ensembl_dir = main_dir + 'ensembl115/'
     input_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df = pd.read_csv(input_file, sep="\t", index_col=0)
@@ -98,7 +98,7 @@ def main():
     junction_sum_final.to_csv(output_file, sep="\t")
     output_file_AS = ensembl_dir + "junctions_cluster_AS_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     junction_AS.to_csv(output_file_AS, sep="\t")
-    print(junction_sum_final['cluster'].nunique(), 'unique clusters,', len(junction_AS), 'AS junctions')
+    print(junction_sum_final['cluster'].nunique(), 'unique clusters,', len(junction_AS), 'AS junctions', groups[0], groups[1])
     return
         
 if __name__ == "__main__":
