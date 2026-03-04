@@ -4,9 +4,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import json
-#import sys
-from general_def import assign_clusters_to_groups
+import sys
 import networkx as nx
+from general_def import assign_clusters_to_groups
 
 def plot_histogram(df, species, cell, ensembl_dir):
      print("Plotting histogram for species:", species, "cell:", cell)
@@ -40,12 +40,16 @@ def get_rows(points_df, df, col_name):
     # Prepare storage
     rows = []
     junction_dict = {}
-    #run_index=0
-    for i in df.index:
-        # if run_index%1000 == 0:
-        #     print(run_index)
-        # run_index+=1
-        chr_, start, end = i.split(":")
+    # Loop using itertuples for faster iteration
+    for row_tuple in df.itertuples(index=True):
+        i = row_tuple.Index
+        # Handle index format
+        if isinstance(i, str):
+            chr_, start, end = i.split(':')
+        elif isinstance(i, tuple) and len(i) == 3:
+            chr_, start, end = i
+        else:
+            continue  # Skip invalid indices
         point_a = f"{chr_}:{start}"
         point_b = f"{chr_}:{end}"
         value_a = points_dict.get(point_a, "")
@@ -69,18 +73,23 @@ def get_rows(points_df, df, col_name):
         # Skip if both values exist but are from different chromosomes
         if value_a and value_b and chrName_a != chrName_b:
             continue
-        # Create row and add metadata
-        row = df.loc[[i]].copy()
-        if int(junction_dict[point_a])>int(junction_dict[point_b]) and int(junction_dict[point_a])>0 and int(junction_dict[point_b])>0: #cd47 - different strand in human and mouse 
+        # Create row copy
+        row = pd.DataFrame([row_tuple[1:]], columns=df.columns, index=[i])
+        if int(junction_dict[point_a]) > int(junction_dict[point_b]) and int(junction_dict[point_a]) > 0 and int(junction_dict[point_b]) > 0:
             row[junction_col] = f"{chrName}:{junction_dict[point_b]}:{junction_dict[point_a]}"
-            junction_dict[point_a] = genomic_position_b
-            junction_dict[point_b] = genomic_position_a
+            # Swap in dict
+            temp = junction_dict[point_a]
+            junction_dict[point_a] = junction_dict[point_b]
+            junction_dict[point_b] = temp
         else:
             row[junction_col] = f"{chrName}:{junction_dict[point_a]}:{junction_dict[point_b]}"
         rows.append(row)
-    # Combine all rows into a single DataFrame
-    orthologs_group = pd.concat(rows)
-    # Modify index format
+    # Combine rows
+    if rows:
+        orthologs_group = pd.concat(rows)
+    else:
+        orthologs_group = pd.DataFrame(columns=df.columns)
+    # Modify index
     orthologs_group.index = orthologs_group.index.map(modify_index)
     return orthologs_group, junction_dict
     
@@ -220,30 +229,24 @@ def removeJuntions(orthologs_group_2, orthologs_group_1, speciesName):
     junction and the start of another. Check `orthologs_group_1` for those junctions.
     If one of them is found in `orthologs_group_1`, remove the other one from 
     `orthologs_group_2`.
-
     Returns a modified copy of `orthologs_group_2` with problematic rows removed 
     (index preserved as `h_junction`).
     """
     print("removeJuntions for species:", speciesName)
     og2 = orthologs_group_2.reset_index().copy()
     og1 = orthologs_group_1.reset_index().copy()
-
     # determine which column to inspect based on species
     if speciesName == 'm':
         inspect_col = 'h_junction'
     else:
         inspect_col = 'm_junction'
-
     if inspect_col not in og2.columns or inspect_col not in og1.columns:
         return orthologs_group_2
-
     # Create a set of all junctions in og1 for fast lookup
     og1_junctions = set(og1[inspect_col].astype(str).dropna().unique())
-
     # Build maps for og2: start_coords and end_coords
     start_coords = {}  # map: (chr, start) -> [junctions]
     end_coords = {}    # map: (chr, end) -> [junctions]
-    
     for j in og2[inspect_col].astype(str).dropna().unique():
         try:
             ch, s, e = j.split(":")
@@ -253,24 +256,19 @@ def removeJuntions(orthologs_group_2, orthologs_group_1, speciesName):
             end_coords.setdefault(e_key, []).append(j)
         except Exception:
             continue
-
     # Find rows to remove
     rows_to_remove = set()
-    
     # Find pairs where one junction's end == another's start
     for coord in set(start_coords.keys()) & set(end_coords.keys()):
         end_junctions = end_coords.get(coord, [])
         start_junctions = start_coords.get(coord, [])
-        
         for end_j in end_junctions:
             for start_j in start_junctions:
                 if end_j == start_j:
                     continue
-                
                 # Check if either junction is in og1
                 end_j_in_og1 = end_j in og1_junctions
                 start_j_in_og1 = start_j in og1_junctions
-                
                 # If one is found in og1, remove the other from og2
                 if end_j_in_og1 and not start_j_in_og1:
                     # Remove start_j from og2
@@ -282,11 +280,9 @@ def removeJuntions(orthologs_group_2, orthologs_group_1, speciesName):
                     mask = og2[inspect_col].astype(str) == end_j
                     for ridx in og2[mask].index:
                         rows_to_remove.add(ridx)
-
     # Remove marked rows
     if rows_to_remove:
         og2 = og2.drop(index=list(rows_to_remove)).reset_index(drop=True)
-
     # restore index and return
     if 'h_junction' in og2.columns:
         og2.set_index('h_junction', inplace=True)
@@ -305,28 +301,26 @@ def readDF(group, species, main_dir, ensembl_dir, points_df, version):
 
     if species == "h":
     #get the rows that have ortholgs
-        orthologs_group, junction_dict = get_rows(points_df, group_df, 'position_h')
-        output_file_dict = ensembl_dir + "/junction_dict_h_" + version + ".json"        
+        orthologs_group, junction_dict_h = get_rows(points_df, group_df, 'position_h')
+        output_file_dict = ensembl_dir + "/junction_dict_h_" + version + "b.json"        
         # Save to a file
         with open(output_file_dict, "w") as f:
-            json.dump(junction_dict, f)
+            json.dump(junction_dict_h, f)
         orthologs_group.index.name = 'h_junction'
-        print(len(orthologs_group), "orthologs junctions from ", group)
-        output_file = ensembl_dir + "/orthologous_junctions_" + group + "_" + version + ".txt"
-        #orthologs_group_1 = pd.read_csv(output_file, sep='\t', index_col=0)
-        orthologs_group.to_csv(output_file, sep="\t")
+        junction_dict = junction_dict_h
     if species == "m": #mouse
-        orthologs_group, junction_dict = get_rows(points_df, group_df, 'position_m')
-        output_file_dict = ensembl_dir + "/junction_dict_m_" + version + ".json"        
+        orthologs_group, junction_dict_m = get_rows(points_df, group_df, 'position_m')
+        output_file_dict = ensembl_dir + "/junction_dict_m_" + version + "b.json"        
         # Save to a file
         with open(output_file_dict, "w") as f:
-            json.dump(junction_dict, f)
+            json.dump(junction_dict_m, f)
         #human positions are the index        
         orthologs_group['m_junction'] = orthologs_group.index
         orthologs_group.set_index('h_junction', inplace=True)        
-       
+        junction_dict = junction_dict_m
+
     print(len(orthologs_group), "orthologs junctions from ", group)
-    output_file = ensembl_dir + "/orthologous_junctions_" + group + "_" + version + ".txt"
+    output_file = ensembl_dir + "/orthologous_junctions_" + group + "_" + version + "b.txt"
     orthologs_group.to_csv(output_file, sep="\t")
     return group_df, orthologs_group, junction_dict
 
@@ -393,10 +387,7 @@ def main():
     merged_df = merged_df.fillna(0)
     output_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df.to_csv(output_file, sep="\t")
-    junction_sum_final = assign_clusters_to_groups(merged_df, min_psi)
-    output_file = ensembl_dir + "junctions_cluster_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
-    junction_sum_final.to_csv(output_file, sep="\t")
     return
           
 if __name__ == "__main__":
-      main() 
+      main()
