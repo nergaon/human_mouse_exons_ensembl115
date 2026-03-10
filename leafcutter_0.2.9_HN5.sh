@@ -1,5 +1,5 @@
 #!/bin/sh
-#/gpfs0/tals/projects/Analysis/human_mouse_exons/scripts/ensembl115->qsub -cwd -V -q tals.q leafcutter_0.2.9_HN4.sh
+#/gpfs0/tals/projects/Analysis/human_mouse_exons/scripts/ensembl115->qsub -cwd -V -q tals.q leafcutter_0.2.9_HN5.sh 'HN6'
 #activate conda env
 source /gpfs0/tals/projects/software/anaconda3/etc/profile.d/conda.sh
 conda activate leafcutter

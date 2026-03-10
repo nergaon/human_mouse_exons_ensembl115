@@ -60,11 +60,11 @@ def plot_p_vs_deltapsi(ax, df, one_cell):
     return
    
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python get_input.py <value>")
-        sys.exit(1)
-    version = sys.argv[1] #version of the results
-    #version = "HN4"
+    #if len(sys.argv) != 2:
+    #    print("Usage: python get_input.py <value>")
+    #    sys.exit(1)
+    #version = sys.argv[1] #version of the results
+    version = "HN6"
     deltapsi = 0.2
     #human_mouse
     cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']

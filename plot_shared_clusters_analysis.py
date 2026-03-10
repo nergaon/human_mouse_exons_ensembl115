@@ -16,44 +16,46 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
-def extract_junction(junction_str):
+def extract_cluster(junction_str):
     """
-    Extract junction coordinates from a junction string.
+    Extract the cluster identifier from a junction string.
     Input: 'chr1:944800:945057:clu_1'
-    Output: 'chr1:944800:945057'
+    Output: 'chr1:944800:945057:clu_1' (full cluster string)
+    This keeps coordinates and cluster name together so that each cluster
+    is treated as a unique entity. We avoid stripping off the cluster
+    since we want to count shared *clusters* rather than individual
+    junction coordinates.
     """
-    parts = junction_str.split(':')
-    if len(parts) >= 3:
-        # Return chr:start:end (without the cluster name)
-        return f"{parts[0]}:{parts[1]}:{parts[2]}"
-    return junction_str
+    # In many files the cluster string is already in the format we want
+    # so simply return the input unchanged (ensures consistent behaviour)
+    return str(junction_str)
 
 def read_leafcutter_clusters(file_path):
     """
-    Read leafcutter AS_clusters file and extract junction coordinates.
-    Returns a set of unique junctions.
+    Read leafcutter AS_clusters file and extract cluster identifiers.
+    Returns a set of unique clusters.
     """
-    junctions = set()
+    clusters = set()
     try:
         # Read the file, skipping the header row
         df = pd.read_csv(file_path, sep='\t', skiprows=1, header=None)
         # First column contains the junction:cluster info
         for junction_str in df[0]:
-            junction = extract_junction(str(junction_str))
-            junctions.add(junction)
-        print(f"  Found {len(junctions)} unique junctions")
-        return junctions
+            cluster = extract_cluster(str(junction_str))
+            clusters.add(cluster)
+        print(f"  Found {len(clusters)} unique clusters")
+        return clusters
     except Exception as e:
         print(f"  Error reading {file_path}: {e}")
         return set()
 
 def read_leafcutter_clusters_filtered(effect_sizes_path, significance_path, deltapsi_threshold=0.2, pval_threshold=0.05):
     """
-    Read leafcutter effect_sizes and cluster significance files, and extract junction coordinates 
+    Read leafcutter effect_sizes and cluster significance files, and extract cluster identifiers
     filtered by |deltapsi| >= deltapsi_threshold and p-value <= pval_threshold.
-    Returns a set of unique junctions.
+    Returns a set of unique clusters.
     """
-    junctions = set()
+    clusters = set()
     try:
         # Read the effect_sizes file
         df_effect = pd.read_csv(effect_sizes_path, sep='\t')
@@ -61,12 +63,10 @@ def read_leafcutter_clusters_filtered(effect_sizes_path, significance_path, delt
         # Read the cluster significance file
         df_sig = pd.read_csv(significance_path, sep='\t')
         
-        # Extract cluster ID from intron string: chr:start:end:clu_X -> chr:clu_X
+        # Extract cluster ID from intron string: chr:start:end:clu_X -> chr:start:end:clu_X
+        # keep full string since we treat the entire cluster descriptor as unique
         def extract_cluster_id(intron):
-            parts = str(intron).split(':')
-            if len(parts) >= 4:
-                return f"{parts[0]}:{parts[3]}"
-            return None
+            return str(intron)
         
         df_effect['cluster'] = df_effect['intron'].apply(extract_cluster_id)
         
@@ -77,23 +77,22 @@ def read_leafcutter_clusters_filtered(effect_sizes_path, significance_path, delt
         df_filtered = df_merged[(abs(df_merged['deltapsi']) >= deltapsi_threshold) & 
                                 (df_merged['p'] <= pval_threshold)]
         
-        print(f"  Total junctions: {len(df_effect)}")
-        print(f"  Filtered junctions (|deltapsi| >= {deltapsi_threshold} AND p-value <= {pval_threshold}): {len(df_filtered)}")
+        print(f"  Total rows: {len(df_effect)}")
+        print(f"  Filtered rows (|deltapsi| >= {deltapsi_threshold} AND p-value <= {pval_threshold}): {len(df_filtered)}")
         
-        # Extract junctions
-        for junction_str in df_filtered['intron']:
-            junction = extract_junction(str(junction_str))
-            junctions.add(junction)
+        # Extract clusters
+        for cluster_str in df_filtered['cluster']:
+            clusters.add(cluster_str)
         
-        print(f"  Unique junctions: {len(junctions)}")
-        return junctions
+        print(f"  Unique clusters: {len(clusters)}")
+        return clusters
     except Exception as e:
         print(f"  Error reading files: {e}")
         return set()
 
 def analyze_shared_clusters(base_dir, cell_types, use_deltapsi=False, deltapsi_threshold=0.2, pval_threshold=0.05):
     """
-    Analyze shared junctions across immune cell types.
+    Analyze shared clusters across immune cell types.
     
     Parameters:
     -----------
@@ -110,9 +109,9 @@ def analyze_shared_clusters(base_dir, cell_types, use_deltapsi=False, deltapsi_t
     
     Returns:
     --------
-    dict : Counts of junctions shared by N cell types (N = 1 to 5)
+    dict : Counts of clusters shared by N cell types (N = 1 to 5)
     """
-    cell_junctions = {}
+    cell_clusters = {}
     
     if use_deltapsi:
         print(f"Reading leafcutter results (|deltapsi| >= {deltapsi_threshold} AND p-value <= {pval_threshold})...\n")
@@ -142,7 +141,7 @@ def analyze_shared_clusters(base_dir, cell_types, use_deltapsi=False, deltapsi_t
                 print(f"  Warning: Missing files in {cell_dir}")
                 continue
             
-            junctions = read_leafcutter_clusters_filtered(effect_sizes_file, significance_file, 
+            clusters = read_leafcutter_clusters_filtered(effect_sizes_file, significance_file, 
                                                          deltapsi_threshold, pval_threshold)
         else:
             # Use AS_clusters file for all junctions
@@ -154,32 +153,32 @@ def analyze_shared_clusters(base_dir, cell_types, use_deltapsi=False, deltapsi_t
                 else:
                     print(f"  Warning: No AS_clusters file found in {cell_dir}")
                     continue
-            junctions = read_leafcutter_clusters(file_path)
+            clusters = read_leafcutter_clusters(file_path)
         
-        cell_junctions[cell_type] = junctions
+        cell_clusters[cell_type] = clusters
     
     # Count sharing across cell types
     print("\n" + "="*60)
-    print("Analyzing junction sharing...")
+    print("Analyzing cluster sharing...")
     print("="*60)
     
-    # Get all unique junctions
-    all_junctions = set()
-    for junctions in cell_junctions.values():
-        all_junctions.update(junctions)
+    # Get all unique clusters
+    all_clusters = set()
+    for clusters in cell_clusters.values():
+        all_clusters.update(clusters)
     
-    print(f"Total unique junctions across all cell types: {len(all_junctions)}")
+    print(f"Total unique clusters across all cell types: {len(all_clusters)}")
     
-    # Count how many cell types each junction appears in
+    # Count how many cell types each cluster appears in
     sharing_counts = defaultdict(int)
-    for junction in all_junctions:
-        count = sum(1 for junctions in cell_junctions.values() if junction in junctions)
+    for cluster in all_clusters:
+        count = sum(1 for clusters in cell_clusters.values() if cluster in clusters)
         sharing_counts[count] += 1
     
     # Print summary
     print("\nSharing summary:")
     for num_cell_types in sorted(sharing_counts.keys()):
-        print(f"  Junctions in {num_cell_types} cell type(s): {sharing_counts[num_cell_types]}")
+        print(f"  Clusters in {num_cell_types} cell type(s): {sharing_counts[num_cell_types]}")
     
     return dict(sharing_counts)
 
@@ -219,7 +218,7 @@ def plot_sharing_results(sharing_counts, cell_types, output_file, title_suffix="
     # Customize the plot
     ax.set_xlabel('Number of Immune Cell Types', fontsize=12, fontweight='bold')
     ax.set_ylabel('Number of Shared Clusters', fontsize=12, fontweight='bold')
-    ax.set_title(f'Shared Junction Clusters{title_suffix}', 
+    ax.set_title(f'Shared Clusters{title_suffix}', 
                  fontsize=14, fontweight='bold', pad=20)
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels)
@@ -250,7 +249,7 @@ def main():
     
     # Analysis 1: All junctions
     print("\n" + "="*70)
-    print("ANALYSIS 1: All Junctions")
+    print("ANALYSIS 1: All Clusters")
     print("="*70 + "\n")
     sharing_counts_all = analyze_shared_clusters(base_dir, cell_types, use_deltapsi=False)
     output_file_all = os.path.join(base_dir, "shared_clusters_across_immune_cells.png")
@@ -258,7 +257,7 @@ def main():
     
     # Analysis 2: Filtered by deltapsi and p-value
     print("\n" + "="*70)
-    print("ANALYSIS 2: Junctions with |ΔΨ| >= 0.2 AND p-value <= 0.05")
+    print("ANALYSIS 2: Clusters with |ΔΨ| >= 0.2 AND p-value <= 0.05")
     print("="*70 + "\n")
     deltapsi_threshold = 0.2
     pval_threshold = 0.05

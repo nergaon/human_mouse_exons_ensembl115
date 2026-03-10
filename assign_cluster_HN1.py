@@ -2,7 +2,8 @@ import networkx as nx
 import pandas as pd
 
 def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):    
-    print("Assigning cluster")  
+    print("Assigning cluster")
+    df = df.reset_index(drop=False)
     # Extract chromosome part
     df.loc[:, 'chrom'] = df[junctionCol].astype(str).str.split(':').str[0]
     # Sample columns (exclude metadata columns)
@@ -46,7 +47,7 @@ def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):
             # Step 3: Rebuild graph for filtered cluster to check for disconnection
             G_filtered = nx.Graph()
             for idx, row in df_cluster_filtered.iterrows():
-                _, start, end = row['h_junction'].split(':')
+                _, start, end = row[junctionCol].split(':')
                 G_filtered.add_edge(idx, f'start_{start}')
                 G_filtered.add_edge(idx, f'end_{end}')
     
@@ -65,8 +66,8 @@ def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):
     df_result = pd.concat(results).sort_index()
     df_result.drop(columns=['chrom'], inplace=True)
     df_result_AS = df_result[df_result['cluster'].duplicated(keep=False)]
-    df_result.set_index('h_junction', inplace=True, drop=True)
-    df_result_AS.set_index('h_junction', inplace=True, drop=True)
+    df_result.set_index(junctionCol, inplace=True, drop=True)
+    df_result_AS.set_index(junctionCol, inplace=True, drop=True)
     return df_result, df_result_AS
 
 def main():
@@ -81,11 +82,11 @@ def main():
     #groups = ['GSE115736', 'GSE116177']
     #species = ['h', 'm']
     #human_human
-    groups = ['GSE115736', 'GSE60424']
-    species = ['h', 'h']
+    #groups = ['GSE115736', 'GSE60424']
+    #species = ['h', 'h']
     #mouse_mouse
-    #groups = ['GSE116177', 'GSE180020']
-    #species = ['m', 'm']
+    groups = ['GSE116177', 'GSE180020']
+    species = ['m', 'm']
     ensembl_dir = main_dir + 'ensembl115/'
     input_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df = pd.read_csv(input_file, sep="\t", index_col=0)

@@ -66,26 +66,32 @@ def create_group_file(cell_dir, cell_df, group_1, group_2):
     return
    
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python get_input.py <value>")
-        sys.exit(1)
-    version = sys.argv[1] #version of the results
-    #version = "HN6"
+    #if len(sys.argv) != 2:
+    #    print("Usage: python get_input.py <value>")
+    #    sys.exit(1)
+    #version = sys.argv[1] #version of the results
+    version = "HN6"
     min_jsr = 10 #remove junctions with less than 10 reads in at least 2 samples   
+    minSamples = 2 #remove junctions with less than minSamples samples with minReads reads
     min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
     # Initialize an empty Index
     #junction_index = pd.Index([])
     #human_mouse
-    group_1 = 'GSE115736'
-    group_2 = 'GSE116177'
+    groups = ['GSE115736', 'GSE116177']
     cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
     cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
     #human_human
-    # group_1 = 'GSE115736'
-    # group_2 = 'GSE60424'
-    # cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    # cell_type_group_2 = ['CD4', 'CD8', 'Bcells', 'NK', 'Monocytes', 'Neutrophils']
+    #groups = ['GSE115736', 'GSE60424']
+    #cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #cell_type_group_2 = ['CD4', 'CD8', 'Bcells', 'NK', 'Monocytes', 'Neutrophils']
+     #mouse mouse
+    # group_1 = 'GSE116177'
+    # group_2 = 'GSE180020'
+    # merge_col_1 = 'mouse_junction'
+    # merge_col_2 = 'mouse_junction'
+    # cell_type_group_1 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
+    # cell_type_group_2 = ['T.4', 'T.8', 'B.fo', 'NK', 'Mo']
     #human_mouse fibroblasts
     #group_1 = 'GSE121052'
     #group_2 = 'GSE161648'
@@ -96,24 +102,16 @@ def main():
     #cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
     #cell_type_group_1 = ['Fibroblast']
     #cell_type_group_2 = ['Fibroblast']
-    clusters_input = main_dir + 'junctions_sum_' + group_1 + '_' + group_2 + "_" + version + ".txt" #all the ortholgs points
+    clusters_input = main_dir + "junctions_cluster_AS_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     clusters_df = pd.read_csv(clusters_input, sep='\t', index_col=0)
-    clusters_df.set_index('h_junction', inplace=True, drop=True)
-    #mouse mouse
-    # group_1 = 'GSE116177'
-    # group_2 = 'GSE180020'
-    # merge_col_1 = 'mouse_junction'
-    # merge_col_2 = 'mouse_junction'
-    # cell_type_group_1 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
-    # cell_type_group_2 = ['T.4', 'T.8', 'B.fo', 'NK', 'Mo']
+    #clusters_df.set_index('h_junction', inplace=True, drop=True)
     
     columns = ["All"] + cell_type_group_1
-    index = ["Orthologues Junctions", "Express Junctions","AS Junctions","AS Clusters"]  
+    index = ["Orthologues Clusters", "Orthologues Junctions", "Express Clusters", "Express Junctions","AS Clusters", "AS Junctions"]  
     sum_df = pd.DataFrame(index=index, columns=columns)
-    #unique_cluster_count = clusters_df['cluster'].nunique()
+    unique_cluster_count = clusters_df['cluster'].nunique()
     print("all junctions", len(clusters_df))
-    #print("all unique clusters", unique_cluster_count)
-    #sum_df.loc["Orthologues Clusters", 'All'] = unique_cluster_count
+    sum_df.loc["Orthologues Clusters", 'All'] = unique_cluster_count
     sum_df.loc["Orthologues Junctions", 'All'] = len(clusters_df)    
     #clusters_index_df = pd.DataFrame(clusters_df.index, columns=['h_junction'])
     #each cell type seperatly
@@ -124,12 +122,14 @@ def main():
         # Count the number of columns with values >= 10 for each row
         junctions_filter = df_filtered.iloc[:,:].apply(lambda x: (x >= min_jsr).sum(), axis=1)
         # Filter to keep only rows that have at least 2 such columns
-        junctions_df = df_filtered[junctions_filter >= 2]
+        junctions_df = df_filtered[junctions_filter >= minSamples]
+        junctions_df['cluster'] = clusters_df.loc[junctions_df.index, 'cluster']
         print("express junctions:", len(junctions_df))
-        #sum_df.loc["Express Clusters", cell_type_group_1[i]] = unique_cluster_count
+        unique_cluster_count = junctions_df['cluster'].nunique()
+        sum_df.loc["Express Clusters", cell_type_group_1[i]] = unique_cluster_count
         sum_df.loc["Express Junctions", cell_type_group_1[i]] = len(junctions_df)
-        junctions_clusters = assign_clusters_to_groups(junctions_df, min_psi)
-        AS_events_value = junctions_clusters.groupby('cluster').filter(lambda x: len(x) > 1)
+        #remove clusters with only one junction
+        AS_events_value = junctions_df.groupby('cluster').filter(lambda x: len(x) > 1)
         #calculate percentages
         AS_events_psi = pd.DataFrame()
         cluster_list = list(AS_events_value.cluster.unique())  
@@ -168,16 +168,16 @@ def main():
         cell_df.index.name = None
         # Replace '.' with '_' and '#' with ''
         cell_df.columns = cell_df.columns.str.replace('.', '_').str.replace('#', '')
-        cell_dir = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/' + cell_type_group_1[i]
+        cell_dir = main_dir + 'leafcutter_' + groups[0] + '_' + groups[1] + '/' + cell_type_group_1[i]
         df_output =  cell_dir  + '/AS_clusters_psi_' + version + '.txt' 
         AS_events_psi.columns = AS_events_psi.columns.str.replace('.', '_').str.replace('#', '')
         AS_events_psi.to_csv(df_output, sep="\t")
         df_output =  cell_dir + '/AS_clusters_value_' + version + '.txt' 
         cell_df.to_csv(df_output, sep=" ")
         #duplicates = cell_df[cell_df.duplicated(keep=False)]
-        create_group_file(cell_dir, cell_df, group_1, group_2)
+        create_group_file(cell_dir, cell_df, groups[0], groups[1])
     
-    output_file = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/sum_table_' + version + '.txt'
+    output_file = main_dir + 'leafcutter_' + groups[0] + '_' + groups[1] + '/sum_table_' + version + '.txt'
     sum_df.to_csv(output_file, sep="\t")
     return
           
