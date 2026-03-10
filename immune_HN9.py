@@ -73,7 +73,7 @@ def main():
     version = "HN6"
     min_jsr = 10 #remove junctions with less than 10 reads in at least 2 samples   
     minSamples = 2 #remove junctions with less than minSamples samples with minReads reads
-    min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
+    min_psi = 0.0 #remove junctions that are less than min_psi (for example, 5%) from all the junctions in a clusters, in all samples
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
     # Initialize an empty Index
     #junction_index = pd.Index([])
