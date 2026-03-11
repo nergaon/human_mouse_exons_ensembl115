@@ -86,10 +86,19 @@ def main():
     # group_2 = 'GSE180020'
     # merge_col = 'mouse_junction'
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
-    #i need to look what the AS_junction_sum file is
-    #clusters_input = main_dir + 'AS_junctions_sum_' + group_1 + "_" + group_2 + '.txt'
-    clusters_input = main_dir + 'junctions_sum_' + group_1 + "_" + group_2 + '.txt'
+    clusters_input = main_dir + 'junctions_cluster_' + group_1 + "_" + group_2 + "_" + version + '.txt'
     clusters_df = pd.read_csv(clusters_input, sep='\t')
+    # Remove rows with clusters that have only 1 junction
+    cluster_counts = clusters_df['cluster'].value_counts()
+    clusters_to_keep = cluster_counts[cluster_counts > 1].index
+    clusters_df = clusters_df[clusters_df['cluster'].isin(clusters_to_keep)]
+    
+    # Count the number of junctions and clusters
+    num_junctions = len(clusters_df)
+    num_clusters = clusters_df['cluster'].nunique()
+    print(f"Number of junctions after filtering: {num_junctions}")
+    print(f"Number of clusters after filtering: {num_clusters}")
+
     # Select only columns with dtype 'object' or 'string'
     clusters_df_data  = clusters_df.select_dtypes(include=['object', 'string']).copy()
     #to the sum data table, add leafcutter results
@@ -97,19 +106,30 @@ def main():
     sum_df = pd.read_csv(sum_df_input, sep='\t', index_col=0)
     output_fig = main_dir + '/leafcutter_' + group_1 + '_' + group_2 + '/' + group_1 + "_" + group_2 + '_p_deltapis.pdf'
     output_fig_jpeg = main_dir + '/leafcutter_' + group_1 + '_' + group_2 + '/' + group_1 + "_" + group_2 + '_p_deltapis.jpeg'
+    
+    # Add cluster information once before the loop (since cluster is the same for all cells)
+    first_cell = cell_type[0]
+    intron_input = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/' + first_cell + '/leafcutter_ds_effect_sizes.txt'
+    intron_sig = pd.read_csv(intron_input, sep='\t')
+    intron_sig['junction'] = intron_sig['intron'].apply(lambda x: ':'.join(x.split(':')[:3]))
+    intron_sig['cluster'] = intron_sig['intron'].apply(lambda x: x.split(':')[-1])
+    #intron_sig_part = intron_sig[['junction','cluster']].drop_duplicates()
+    intron_sig_part = intron_sig[['junction']].drop_duplicates()
+    clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on='h_junction', right_on='junction', how='left')
+    clusters_df_data.drop(columns=['junction'], inplace=True)
+    
     with PdfPages(output_fig) as pdf:
         # Create a single figure with 6 subplots
         fig, axs = plt.subplots(3, 2, figsize=(8, 12))  # 3 rows x 2 columns
         i = 0
         for one_cell in cell_type:
             print(one_cell)
-            #cluster_sig_input = main_dir + 'leafcutter_0.2.9/' + one_cell + '/leafcutter_ds_cluster_significance.txt'
             cluster_sig_input = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/' + one_cell + '/leafcutter_ds_cluster_significance.txt'
             cluster_sig = pd.read_csv(cluster_sig_input, sep='\t')
             # Extract the part after the colon in the 'cluster' column
             cluster_sig['extracted_cluster'] = cluster_sig['cluster'].str.split(':').str[1]
             genes_df = cluster_sig[['extracted_cluster', 'p.adjust','genes']]
-            cluster_sig_part = cluster_sig[['extracted_cluster', 'p.adjust']]
+            cluster_sig_part = cluster_sig[['extracted_cluster', 'p.adjust']].drop_duplicates(subset=['extracted_cluster'], keep='first')
             # Count the number of rows with non-null values in the 'p.adjust' column
             non_null_count = cluster_sig_part['p.adjust'].notna().sum()
             # Count how many of those values are <= 0.05
@@ -126,15 +146,17 @@ def main():
             intron_sig['cluster'] = intron_sig['intron'].apply(lambda x: x.split(':')[-1])
             # Add a column for absolute deltapsi
             intron_sig['abs_deltapsi'] = intron_sig['deltapsi'].abs()
-            # Get the row with the highest absolute deltapsi for each junction
-            intron_sig_part = intron_sig[['junction','cluster','abs_deltapsi']]
+            # Get abs_deltapsi for each junction
+            intron_sig_part = intron_sig[['junction','abs_deltapsi']].drop_duplicates(subset=['junction'], keep='first')
             clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on='h_junction', right_on='junction', how='left')
-            clusters_df_data = pd.merge(clusters_df_data, cluster_sig_part, left_on = 'cluster', right_on = 'extracted_cluster', how='left')
+            clusters_df_data.drop(columns=['junction'], inplace=True)
+            # Merge p.adjust values using the cluster column - rename extracted_cluster to cluster for merging
+            cluster_sig_part_renamed = cluster_sig_part.rename(columns={'extracted_cluster': 'cluster'})
+            clusters_df_data = pd.merge(clusters_df_data, cluster_sig_part_renamed, left_on='cluster', right_on='cluster', how='left', suffixes=('', f'_{one_cell}'))
             clusters_df_data.drop_duplicates(inplace=True)
-            clusters_df_data.drop(columns=['extracted_cluster','junction'], inplace=True)
             #new_name = one_cell + "_deltapsi"
-            # Rename columns
-            clusters_df_data.rename(columns=lambda x: f"{one_cell}_{x}" if x in ['cluster', 'abs_deltapsi', 'p.adjust'] else x, inplace=True)
+            # Rename columns (rename abs_deltapsi with cell type, keep cluster for next iteration)
+            clusters_df_data.rename(columns={'abs_deltapsi': f'{one_cell}_abs_deltapsi', 'p.adjust': f'{one_cell}_p.adjust'}, inplace=True)
             #plot
             intron_sig_part = intron_sig[['cluster', 'deltapsi']]
             intron_sig_part.loc[:, 'deltapsi'] = intron_sig_part['deltapsi'].abs()
@@ -142,7 +164,7 @@ def main():
             intron_sig_part = intron_sig_part.loc[intron_sig_part.groupby('cluster')['deltapsi'].idxmax()]
             intron_sig_part = pd.merge(intron_sig_part, genes_df, left_on = 'cluster', right_on = 'extracted_cluster')
             ax = axs[i // 2, i % 2]  # Determine subplot position
-            plot_p_vs_deltapsi(ax,intron_sig_part, one_cell)
+            #lot_p_vs_deltapsi(ax,intron_sig_part, one_cell)
             i = i + 1
             # Count the number of rows with 'p.adjust <= 0.05' and 'deltapsi >= 0.1'
             count = intron_sig_part[(intron_sig_part['p.adjust'] <= 0.05) & (intron_sig_part['deltapsi'] >= deltapsi)].shape[0]

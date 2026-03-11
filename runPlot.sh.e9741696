@@ -1,0 +1,2 @@
+/gpfs0/tals/projects/Analysis/human_mouse_exons/scripts/ensembl115/plot_bar_HN11.py:164: DtypeWarning: Columns (17) have mixed types. Specify dtype option on import or set low_memory=False.
+  sum_df = pd.read_csv(sum_table_input, sep='\t',index_col=0)

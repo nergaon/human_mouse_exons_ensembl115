@@ -65,7 +65,7 @@ def create_group_file(cell_dir, cell_df, group_1, group_2):
     groups_df.to_csv(output_file, sep='\t', index=False, header=False)
     return
    
-def main():
+def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
     #if len(sys.argv) != 2:
     #    print("Usage: python get_input.py <value>")
     #    sys.exit(1)
@@ -104,7 +104,6 @@ def main():
     #cell_type_group_2 = ['Fibroblast']
     clusters_input = main_dir + "junctions_cluster_AS_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     clusters_df = pd.read_csv(clusters_input, sep='\t', index_col=0)
-    #clusters_df.set_index('h_junction', inplace=True, drop=True)
     
     columns = ["All"] + cell_type_group_1
     index = ["Orthologues Clusters", "Orthologues Junctions", "Express Clusters", "Express Junctions","AS Clusters", "AS Junctions"]  
@@ -132,10 +131,42 @@ def main():
         AS_events_value = junctions_df.groupby('cluster').filter(lambda x: len(x) > 1)
         #calculate percentages
         AS_events_psi = pd.DataFrame()
+        AS_events_value_final = pd.DataFrame()
         cluster_list = list(AS_events_value.cluster.unique())  
         first = 1
         for cluster in cluster_list:
+            #cluster = "clu_7543" #for testing
             one_cluster = AS_events_value.loc[AS_events_value['cluster'] == cluster]
+            # Remove junctions that don't share any start or end points with other junctions
+            if len(one_cluster) > 1:
+                junction_indices = one_cluster.index.tolist()
+                # Extract start and end points from junction indices (format: chr:start:end)
+                junction_points = {}
+                for junction in junction_indices:
+                    parts = junction.split(':')
+                    start = parts[1]
+                    end = parts[2]
+                    junction_points[junction] = (start, end)
+                # Keep only junctions that share at least one point with another junction
+                junctions_to_keep = []
+                for junction in junction_indices:
+                    start, end = junction_points[junction]
+                    has_shared_point = False
+                    for other_junction in junction_indices:
+                        if junction != other_junction:
+                            other_start, other_end = junction_points[other_junction]
+                            if start == other_start or start == other_end or end == other_start or end == other_end:
+                                has_shared_point = True
+                                break
+                    if has_shared_point:
+                        junctions_to_keep.append(junction)               
+                one_cluster = one_cluster.loc[junctions_to_keep]
+                if first:
+                    AS_events_value_final = one_cluster.copy()
+                else:
+                    AS_events_value_final = pd.concat([AS_events_value_final, one_cluster])
+            else:
+                print("Cluster", cluster, "has only one junction and will be removed.")
             # Calculate percentages for each column separately
             for col in one_cluster.columns[:-1]: 
                 #convert to perecent only if there are more than 0 reads in a col
@@ -150,20 +181,20 @@ def main():
             else:
                 frames = [AS_events_psi, one_cluster]
                 AS_events_psi = pd.concat(frames)
-        unique_cluster_count = AS_events_value['cluster'].nunique()
+        unique_cluster_count = AS_events_value_final['cluster'].nunique()
         print("Number of human mouse leafcutter AS clusters", unique_cluster_count)
-        print("Number of human mouse leafcutter AS junctions", len(AS_events_value))
+        print("Number of human mouse leafcutter AS junctions", len(AS_events_value_final))
         sum_df.loc["AS Clusters", cell_type_group_1[i]] = unique_cluster_count
-        sum_df.loc["AS Junctions", cell_type_group_1[i]] = len(AS_events_value)
-        #junction_index = junction_index.union(AS_events_value.index)
+        sum_df.loc["AS Junctions", cell_type_group_1[i]] = len(AS_events_value_final)
+        #junction_index = junction_index.union(AS_events_value_final.index)
 
-        AS_events_value.index = AS_events_value.index + ":" + AS_events_value['cluster'].astype(str)
-        AS_events_value = AS_events_value.drop(columns=['cluster'])
+        AS_events_value_final.index = AS_events_value_final.index + ":" + AS_events_value_final['cluster'].astype(str)
+        AS_events_value_final = AS_events_value_final.drop(columns=['cluster'])
         AS_events_psi.index = AS_events_psi.index + ":" + AS_events_psi['cluster'].astype(str)
         AS_events_psi = AS_events_psi.drop(columns=['cluster'])
         
         #convert to leafcutter table
-        cell_df = AS_events_value.copy()
+        cell_df = AS_events_value_final.copy()
         # Remove the index name
         cell_df.index.name = None
         # Replace '.' with '_' and '#' with ''
