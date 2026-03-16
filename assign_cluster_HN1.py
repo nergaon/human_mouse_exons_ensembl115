@@ -1,7 +1,7 @@
 import networkx as nx
 import pandas as pd
 
-def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):    
+def assign_clusters_to_groups(df, junctionCol, startNumCol, min_psi=0.0):    
     print("Assigning cluster")
     df = df.reset_index(drop=False)
     # Extract chromosome part
@@ -65,7 +65,28 @@ def assign_clusters_to_groups(df, min_psi, junctionCol, startNumCol):
     # Combine all results
     df_result = pd.concat(results).sort_index()
     df_result.drop(columns=['chrom'], inplace=True)
+    #keep only clusters with more than 1 junction
     df_result_AS = df_result[df_result['cluster'].duplicated(keep=False)]
+
+    # remove clusters composed entirely of '-' junctions in either h_junction or m_junction
+    # if a column does not exist it is ignored
+    good_clusters = []
+    for clu, grp in df_result.groupby('cluster'):
+        bad = False
+        for col in ('h_junction', 'm_junction'):
+            if col in grp.columns and grp[col].astype(str).str.contains('-').all():
+                bad = True
+                break
+        if not bad:
+            good_clusters.append(clu)
+    if good_clusters:
+        df_result = df_result[df_result['cluster'].isin(good_clusters)]
+        df_result_AS = df_result_AS[df_result_AS['cluster'].isin(good_clusters)]
+    else:
+        # no good clusters, return empty frames
+        df_result = df_result.iloc[0:0]
+        df_result_AS = df_result_AS.iloc[0:0]
+
     df_result.set_index(junctionCol, inplace=True, drop=True)
     df_result_AS.set_index(junctionCol, inplace=True, drop=True)
     return df_result, df_result_AS
@@ -76,30 +97,53 @@ def main():
     #    sys.exit(1)
     #version = sys.argv[1] #version of the results
     version = "HN6"
-    min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
+    #min_psi = 0.0 #remove junctions that are less than 5% from all the junctions in a clusters, in all samples
+    min_jsr = 10 #remove junctions with less than 10 reads in at least minSamples samples from the same cell type group   
+    minSamples = 2 #remove junctions with less than minSamples samples with minReads reads
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
     #human_mouse
-    #groups = ['GSE115736', 'GSE116177']
-    #species = ['h', 'm']
+    groups = ['GSE115736', 'GSE116177']
+    species = ['h', 'm']
     #human_human
     #groups = ['GSE115736', 'GSE60424']
     #species = ['h', 'h']
     #mouse_mouse
-    groups = ['GSE116177', 'GSE180020']
-    species = ['m', 'm']
+    #groups = ['GSE116177', 'GSE180020']
+    #species = ['m', 'm']
     ensembl_dir = main_dir + 'ensembl115/'
     input_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df = pd.read_csv(input_file, sep="\t", index_col=0)
-    startNumCol = 6
+    #remove junctions with less than min_jsr reads in at least minSamples samples from the same cell type group
+    cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
+    
+    # Filter junctions: keep only those with at least min_jsr reads in at least minSamples samples from at least one cell type
+    filtered_junctions = set()
+    for i in range(len(cell_type_group_1)):
+        df_filtered = merged_df[[col for col in merged_df.columns if cell_type_group_1[i] in col or cell_type_group_2[i] in col]]
+        # Check each junction in df_filtered
+        for idx, row in df_filtered.iterrows():
+            count = (row >= min_jsr).sum()
+            if count >= minSamples:
+                filtered_junctions.add(idx)
+    
+    merged_df = merged_df.loc[list(filtered_junctions)]
+    print(merged_df.columns)
+    print("After filtering for min_jsr and minSamples:", len(merged_df), "junctions remain.")
+    startNumCol = 7
     if species[0] == species[1]:
-        junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, min_psi, 'junction_id', startNumCol)
+        junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, 'junction_id', startNumCol)
     else:
-        junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, min_psi, 'h_junction', startNumCol)
+        junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, 'h_junction', startNumCol)
+    
+    # Sort by cluster, then by h_junction
+    junction_AS = junction_AS.reset_index().sort_values(['cluster', 'h_junction']).set_index('h_junction')
+    
     output_file = ensembl_dir + "junctions_cluster_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     junction_sum_final.to_csv(output_file, sep="\t")
     output_file_AS = ensembl_dir + "junctions_cluster_AS_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     junction_AS.to_csv(output_file_AS, sep="\t")
-    print(junction_sum_final['cluster'].nunique(), 'unique clusters,', len(junction_AS), 'AS junctions', groups[0], groups[1])
+    print(junction_AS['cluster'].nunique(), 'unique clusters,', len(junction_AS), 'AS junctions', groups[0], groups[1])
     return
         
 if __name__ == "__main__":

@@ -71,9 +71,9 @@ def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
     #    sys.exit(1)
     #version = sys.argv[1] #version of the results
     version = "HN6"
-    min_jsr = 10 #remove junctions with less than 10 reads in at least 2 samples   
-    minSamples = 2 #remove junctions with less than minSamples samples with minReads reads
-    min_psi = 0.0 #remove junctions that are less than min_psi (for example, 5%) from all the junctions in a clusters, in all samples
+    min_jsr = 0 #remove junctions with less than 10 reads in at least 2 samples   
+    minSamples = 0 #remove junctions with less than minSamples samples with minReads reads
+    #min_psi = 0.0 #remove junctions that are less than min_psi (for example, 5%) from all the junctions in a clusters, in all samples
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
     # Initialize an empty Index
     #junction_index = pd.Index([])

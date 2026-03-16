@@ -134,7 +134,7 @@ def main():
         print("Usage: python get_input.py <value>")
         sys.exit(1)
     version = sys.argv[1] #version of the results
-    #version = "HN4"
+    #version = "HN6"
     #fibroblasts
     #cell_type = ['Fibroblast']
     #group_1 = 'GSE121052'
@@ -168,8 +168,8 @@ def main():
         cell_table = sum_df[[main_col] + sum_df.filter(like=one_cell).columns.tolist()]
         cell_col_p = one_cell + '_p.adjust'
         cell_col_deltaPSI = one_cell + '_abs_deltapsi'
-        cell_col_cluster = one_cell + '_cluster'
-        sucess_clusters = cell_table.loc[cell_table[cell_col_p].notnull(), cell_col_cluster].unique()
+        #cell_col_cluster = one_cell + '_cluster'
+        sucess_clusters = cell_table.loc[cell_table[cell_col_p].notnull(), 'cluster'].unique()
         percent_table_input = main_dir + one_cell + "/AS_clusters_psi_" + version + ".txt"
         percent_table = pd.read_csv(percent_table_input, sep='\t')
         # Split the 'Unnamed: 0' column into two columns
@@ -189,16 +189,16 @@ def main():
         for cluster in sucess_clusters: #select clusters to plot
             print(cluster)
             #print(cluster)
-            p_value = cell_table[cell_table[cell_col_cluster] == cluster][cell_col_p].unique()
+            p_value = cell_table[cell_table['cluster'] == cluster][cell_col_p].unique()
             formatted_p_value = "{:.3f}".format(p_value[0])
-            deltapsi = cell_table[cell_table[cell_col_cluster] == cluster][cell_col_deltaPSI].abs().max()
+            deltapsi = cell_table[cell_table['cluster'] == cluster][cell_col_deltaPSI].abs().max()
             formatted_deltapsi = "{:.3f}".format(deltapsi)
             comment = 'p=' + str(formatted_p_value) + "_deltapsi=" + str(formatted_deltapsi)
             count_fig = count_fig + 1
             #select the cluter and its introns in the same order in the count and persent db
             persent_cluster = percent_table.loc[percent_table['cluster'] == cluster]
             persent_cluster = persent_cluster.sort_values(by=[main_col]) 
-            gene_name = sum_df.loc[sum_df[cell_col_cluster] == cluster, 'symbol_h'].values[0]
+            gene_name = sum_df.loc[sum_df['cluster'] == cluster, 'symbol_h'].values[0]
             #persent_cluster.drop(columns=['ensembl','symbol','mouse_junction','cluster'], inplace = True)
             persent_cluster.drop(columns=['cluster'], inplace = True)
             value_cluster = value_table[value_table.index.isin(persent_cluster.index)]
