@@ -78,13 +78,13 @@ def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
     # Initialize an empty Index
     #junction_index = pd.Index([])
     #human_mouse
-    groups = ['GSE115736', 'GSE116177']
-    cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
-    #human_human
-    #groups = ['GSE115736', 'GSE60424']
+    #groups = ['GSE115736', 'GSE116177']
     #cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    #cell_type_group_2 = ['CD4', 'CD8', 'Bcells', 'NK', 'Monocytes', 'Neutrophils']
+    #cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
+    #human_human
+    groups = ['GSE115736', 'GSE60424']
+    cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    cell_type_group_2 = ['CD4', 'CD8', 'Bcells', 'NK', 'Monocytes', 'Neutrophils']
      #mouse mouse
     # group_1 = 'GSE116177'
     # group_2 = 'GSE180020'
@@ -104,7 +104,7 @@ def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
     #cell_type_group_2 = ['Fibroblast']
     clusters_input = main_dir + "junctions_cluster_AS_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     clusters_df = pd.read_csv(clusters_input, sep='\t', index_col=0)
-    
+    clusters_df.index.duplicated().sum()
     columns = ["All"] + cell_type_group_1
     index = ["Orthologues Clusters", "Orthologues Junctions", "Express Clusters", "Express Junctions","AS Clusters", "AS Junctions"]  
     sum_df = pd.DataFrame(index=index, columns=columns)

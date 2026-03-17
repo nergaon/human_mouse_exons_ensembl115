@@ -349,7 +349,6 @@ def save_cluster_names_to_file(cluster_names_all, cluster_names_filtered, base_d
     print(f"\nCluster names saved to: {output_file}")
 
 def main():
-    """Main function."""
     base_dir = "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177"
     cell_types = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut"]
     
