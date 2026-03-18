@@ -120,7 +120,13 @@ def main():
     intron_sig_part = intron_sig[['junction']].drop_duplicates()
     clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on=col_name, right_on='junction', how='left')
     clusters_df_data.drop(columns=['junction'], inplace=True)
-    
+    cluster_sig_input = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/' + first_cell + '/leafcutter_ds_cluster_significance.txt'
+    cluster_sig = pd.read_csv(cluster_sig_input, sep='\t')
+    # Extract the part after the colon in the 'cluster' column
+    cluster_sig['extracted_cluster'] = cluster_sig['cluster'].str.split(':').str[1]
+    genes_df = cluster_sig[['extracted_cluster','genes']]
+    clusters_df_data = pd.merge(clusters_df_data, genes_df, left_on='cluster', right_on='extracted_cluster', how='left')       
+
     with PdfPages(output_fig) as pdf:
         # Create a single figure with 6 subplots
         fig, axs = plt.subplots(3, 2, figsize=(8, 12))  # 3 rows x 2 columns
@@ -131,7 +137,7 @@ def main():
             cluster_sig = pd.read_csv(cluster_sig_input, sep='\t')
             # Extract the part after the colon in the 'cluster' column
             cluster_sig['extracted_cluster'] = cluster_sig['cluster'].str.split(':').str[1]
-            genes_df = cluster_sig[['extracted_cluster', 'p.adjust','genes']]
+            #genes_df = cluster_sig[['extracted_cluster', 'p.adjust','genes']]
             cluster_sig_part = cluster_sig[['extracted_cluster', 'p.adjust']].drop_duplicates(subset=['extracted_cluster'], keep='first')
             # Count the number of rows with non-null values in the 'p.adjust' column
             non_null_count = cluster_sig_part['p.adjust'].notna().sum()
