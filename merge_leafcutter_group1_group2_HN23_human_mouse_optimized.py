@@ -288,12 +288,40 @@ def removeJuntions(orthologs_group_2, orthologs_group_1, speciesName):
         og2.set_index('h_junction', inplace=True)
     return og2
 
+def remove_duplicated_junctions(df):
+    # Remove duplicated junctions based on the same (chr, start, end) but different strands, keeping the one with the most reads
+    # Step 1: split index
+    df = df.copy()
+   # split into parts (allow variable length)
+    split_cols = df.index.to_series().str.split(':')
+    # take only first 3 components
+    df['chr']   = split_cols.str[0]
+    df['start'] = split_cols.str[1]
+    df['end']   = split_cols.str[2]
+    # Step 2: compute total reads per junction
+    df['total_reads'] = df.drop(columns=['chr','start','end']).sum(axis=1)
+    # Step 3: keep only max per (chr, start, end)
+    df_filtered = (
+        df.sort_values('total_reads', ascending=False)
+        .drop_duplicates(subset=['chr','start','end'], keep='first'))
+    # Step 4: restore original format
+    df_filtered.index = (
+        df_filtered['chr'] + ':' +
+        df_filtered['start'] + ':' +
+        df_filtered['end'])
+    # Step 5: clean columns
+    df_filtered = df_filtered.drop(columns=['chr','start','end','total_reads'])
+    return df_filtered
+
 def readDF(group, species, main_dir, ensembl_dir, points_df, version):
     print("Reading data for group:", group, "species:", species)
     group_input = main_dir + group + "/leafcutter_0.2.9/" + group + "_JSR_junction_counts.tsv"
     #group_1_input = main_dir + group_1 + "/leafcutter_0.2.9/" + group_1 + "_JSR_junction_counts_cuta.tsv"
     group_df = pd.read_csv(group_input, sep='\t', index_col=0)
     print(len(group_df), "junctions from ", group)
+    #junctions that have values in + and - strands, remove the junction with less reads (probably a problem in the annotation)
+    group_df = remove_duplicated_junctions(group_df)
+    print(len(group_df), "junctions from ", group, "after removing duplicated junctions")
     group_df.index = group_df.index.map(modify_index)
     group_df.columns = [col + "_" + group for col in group_df.columns] #add sample name to col
     #group_df = group_df.head(2000)
@@ -383,7 +411,7 @@ def main():
     #remove junctions with less than minSamples samples with minReads reads
     numeric_df = merged_df.select_dtypes(include='number')
     merged_df = merged_df[(numeric_df >= minReads).sum(axis=1) >= minSamples] 
-    print(len(merged_df), "merge junctions - after filtering with minReads and minSamples")
+    print(len(merged_df), "merge junctions - after filtering with minReads and minSamples in all cell types")
     merged_df = merged_df.fillna(0)
     output_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df.to_csv(output_file, sep="\t")

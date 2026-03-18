@@ -3,7 +3,7 @@ import pandas as pd
 
 def assign_clusters_to_groups(df, junctionCol, startNumCol, min_psi=0.0):    
     print("Assigning cluster")
-    df = df.reset_index(drop=False)
+    #df = df.reset_index(drop=False)
     # Extract chromosome part
     df.loc[:, 'chrom'] = df[junctionCol].astype(str).str.split(':').str[0]
     # Sample columns (exclude metadata columns)
@@ -13,8 +13,8 @@ def assign_clusters_to_groups(df, junctionCol, startNumCol, min_psi=0.0):
     # Initialize an empty list to store results
     results = []
     cluster_counter = 1  # Global cluster counter    
-    # Process each chromosome separately
-    for chrom in df['chrom'].unique():
+    # Process each chromosome separately. only regular chromosomes (length <= 5) are processed, to avoid issues with scaffolds and unplaced contigs
+    for chrom in df[df['chrom'].str.len() <= 5]['chrom'].unique():
         print(chrom)
         # Filter rows for the current chromosome
         df_chrom = df[df['chrom'] == chrom].copy()      
@@ -132,12 +132,15 @@ def main():
     print("After filtering for min_jsr and minSamples:", len(merged_df), "junctions remain.")
     startNumCol = 7
     if species[0] == species[1]:
+        merged_df.index.name = 'junction_id'
         junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, 'junction_id', startNumCol)
+         # Sort by cluster, then by h_junction
+        junction_AS = junction_AS.reset_index().sort_values(['cluster', 'junction_id']).set_index('junction_id')
     else:
+        merged_df.index.name = 'h_junction'
         junction_sum_final, junction_AS = assign_clusters_to_groups(merged_df, 'h_junction', startNumCol)
-    
-    # Sort by cluster, then by h_junction
-    junction_AS = junction_AS.reset_index().sort_values(['cluster', 'h_junction']).set_index('h_junction')
+        # Sort by cluster, then by h_junction
+        junction_AS = junction_AS.reset_index().sort_values(['cluster', 'h_junction']).set_index('h_junction')
     
     output_file = ensembl_dir + "junctions_cluster_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     junction_sum_final.to_csv(output_file, sep="\t")

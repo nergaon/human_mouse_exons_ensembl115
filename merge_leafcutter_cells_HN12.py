@@ -67,9 +67,10 @@ def main():
     version = "HN6"
     deltapsi = 0.2
     #human_mouse
-    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    group_1 = 'GSE115736'
-    group_2 = 'GSE116177'
+    #cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #group_1 = 'GSE115736'
+    #group_2 = 'GSE116177'
+    #col_name = 'human_junction'
     #cell_type = ['Fibroblast']
     #group_1 = 'GSE121052'
     #group_2 = 'GSE161648'
@@ -77,14 +78,16 @@ def main():
     #group_1 = 'E-MTAB-5919_human'
     #group_2 = 'E-MTAB-5919_mouse'
     #human_human
-    # cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    # group_1 = 'GSE115736'
-    # group_2 = 'GSE60424'
+    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    group_1 = 'GSE115736'
+    group_2 = 'GSE60424'
+    col_name = 'junction_id' 
     #mouse_mouse. in this comparison there is no gene col. this is why there is try and except
     # cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
     # group_1 = 'GSE116177'
     # group_2 = 'GSE180020'
     # merge_col = 'mouse_junction'
+    #col_name = 'junction_id' 
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
     clusters_input = main_dir + 'junctions_cluster_' + group_1 + "_" + group_2 + "_" + version + '.txt'
     clusters_df = pd.read_csv(clusters_input, sep='\t')
@@ -107,7 +110,7 @@ def main():
     output_fig = main_dir + '/leafcutter_' + group_1 + '_' + group_2 + '/' + group_1 + "_" + group_2 + '_p_deltapis.pdf'
     output_fig_jpeg = main_dir + '/leafcutter_' + group_1 + '_' + group_2 + '/' + group_1 + "_" + group_2 + '_p_deltapis.jpeg'
     
-    # Add cluster information once before the loop (since cluster is the same for all cells)
+    # Add cluster information once before the loop (since clusters are the same for all cells)
     first_cell = cell_type[0]
     intron_input = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/' + first_cell + '/leafcutter_ds_effect_sizes.txt'
     intron_sig = pd.read_csv(intron_input, sep='\t')
@@ -115,7 +118,7 @@ def main():
     intron_sig['cluster'] = intron_sig['intron'].apply(lambda x: x.split(':')[-1])
     #intron_sig_part = intron_sig[['junction','cluster']].drop_duplicates()
     intron_sig_part = intron_sig[['junction']].drop_duplicates()
-    clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on='h_junction', right_on='junction', how='left')
+    clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on=col_name, right_on='junction', how='left')
     clusters_df_data.drop(columns=['junction'], inplace=True)
     
     with PdfPages(output_fig) as pdf:
@@ -148,7 +151,7 @@ def main():
             intron_sig['abs_deltapsi'] = intron_sig['deltapsi'].abs()
             # Get abs_deltapsi for each junction
             intron_sig_part = intron_sig[['junction','abs_deltapsi']].drop_duplicates(subset=['junction'], keep='first')
-            clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on='h_junction', right_on='junction', how='left')
+            clusters_df_data = pd.merge(clusters_df_data, intron_sig_part, left_on=col_name, right_on='junction', how='left')
             clusters_df_data.drop(columns=['junction'], inplace=True)
             # Merge p.adjust values using the cluster column - rename extracted_cluster to cluster for merging
             cluster_sig_part_renamed = cluster_sig_part.rename(columns={'extracted_cluster': 'cluster'})
@@ -189,7 +192,7 @@ def main():
             col_name_2 = group_2 + '_avg_' + one_cell
             AS_value[col_name_2] = AS_value[group_2_cols].mean(axis=1)
             AS_value_part = AS_value[['junction', col_name_1, col_name_2]]
-            clusters_df_data = pd.merge(clusters_df_data, AS_value_part,left_on = "h_junction", right_on = 'junction', how='left')
+            clusters_df_data = pd.merge(clusters_df_data, AS_value_part, left_on = col_name, right_on = 'junction', how='left')
             clusters_df_data.drop_duplicates(inplace=True)
             clusters_df_data.drop(columns=['junction'], inplace=True)
         # Adjust layout

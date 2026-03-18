@@ -144,15 +144,15 @@ def main():
     #group_1 = 'E-MTAB-5919_human'
     #group_2 = 'E-MTAB-5919_mouse'
     #human_mouse
-    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    main_col = 'h_junction'
-    group_1 = 'GSE115736'
-    group_2 = 'GSE116177'
+    #cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #main_col = 'h_junction'
+    #group_1 = 'GSE115736'
+    #group_2 = 'GSE116177'
     #human_human
-    # cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    # main_col = 'junction'
-    # group_1 = 'GSE115736'
-    # group_2 = 'GSE60424'
+    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    main_col = 'junction_id' 
+    group_1 = 'GSE115736'
+    group_2 = 'GSE60424'
     #mouse_mouse
     # cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
     # group_1 = 'GSE116177'
@@ -165,7 +165,7 @@ def main():
     
     for one_cell in cell_type:
         print(one_cell)
-        cell_table = sum_df[[main_col] + sum_df.filter(like=one_cell).columns.tolist()]
+        cell_table = sum_df[[main_col, 'cluster'] + sum_df.filter(like=one_cell).columns.tolist()]
         cell_col_p = one_cell + '_p.adjust'
         cell_col_deltaPSI = one_cell + '_abs_deltapsi'
         #cell_col_cluster = one_cell + '_cluster'
@@ -184,7 +184,7 @@ def main():
         value_table[[main_col, 'cluster']] = value_table['Unnamed: 0'].str.rsplit(':', n=1, expand=True)
         # Drop the original 'Unnamed: 0' column
         value_table.drop(columns=['Unnamed: 0'], inplace=True)
-        value_table.set_index('h_junction', inplace=True)
+        value_table.set_index(main_col, inplace=True)
         count_fig = 0
         for cluster in sucess_clusters: #select clusters to plot
             print(cluster)
@@ -197,7 +197,7 @@ def main():
             count_fig = count_fig + 1
             #select the cluter and its introns in the same order in the count and persent db
             persent_cluster = percent_table.loc[percent_table['cluster'] == cluster]
-            persent_cluster = persent_cluster.sort_values(by=[main_col]) 
+            persent_cluster = persent_cluster.sort_values(by=['h_junction']) 
             gene_name = sum_df.loc[sum_df['cluster'] == cluster, 'symbol_h'].values[0]
             #persent_cluster.drop(columns=['ensembl','symbol','mouse_junction','cluster'], inplace = True)
             persent_cluster.drop(columns=['cluster'], inplace = True)

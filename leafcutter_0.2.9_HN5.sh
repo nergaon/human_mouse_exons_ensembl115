@@ -16,18 +16,16 @@ leafcutter_folders=(
 	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NveB"
 	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NK"
 	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Mono"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Neut"
- )
+	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Neut")
 
-##human human
+#human human
 #leafcutter_folders=(
 # "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/CD4T"
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/CD8T"
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/NveB"
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/NK"
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/Mono"
-#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/Neut"
-#)
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/Neut")
 
 #mouse mouse
 #leafcutter_folders=(
@@ -35,8 +33,7 @@ leafcutter_folders=(
 #    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Cd8T"
 #    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/BCell"
 #    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/NK"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Mono"
-#)
+#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Mono")
 
 leafcutter_scripts="/gpfs0/tals/projects/software/leafcutter_0.2.9"
 
