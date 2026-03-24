@@ -70,7 +70,7 @@ def main():
     #cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
     #group_1 = 'GSE115736'
     #group_2 = 'GSE116177'
-    #col_name = 'human_junction'
+    #col_name = 'h_junction'
     #cell_type = ['Fibroblast']
     #group_1 = 'GSE121052'
     #group_2 = 'GSE161648'
@@ -78,16 +78,15 @@ def main():
     #group_1 = 'E-MTAB-5919_human'
     #group_2 = 'E-MTAB-5919_mouse'
     #human_human
-    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    group_1 = 'GSE115736'
-    group_2 = 'GSE60424'
-    col_name = 'junction_id' 
-    #mouse_mouse. in this comparison there is no gene col. this is why there is try and except
-    # cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
-    # group_1 = 'GSE116177'
-    # group_2 = 'GSE180020'
-    # merge_col = 'mouse_junction'
+    #cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #group_1 = 'GSE115736'
+    #group_2 = 'GSE60424'
     #col_name = 'junction_id' 
+    #mouse_mouse. in this comparison there is no gene col. this is why there is try and except
+    cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
+    group_1 = 'GSE116177'
+    group_2 = 'GSE180020'
+    col_name = 'junction_id' 
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/'
     clusters_input = main_dir + 'junctions_cluster_' + group_1 + "_" + group_2 + "_" + version + '.txt'
     clusters_df = pd.read_csv(clusters_input, sep='\t')
@@ -126,6 +125,7 @@ def main():
     cluster_sig['extracted_cluster'] = cluster_sig['cluster'].str.split(':').str[1]
     genes_df = cluster_sig[['extracted_cluster','genes']]
     clusters_df_data = pd.merge(clusters_df_data, genes_df, left_on='cluster', right_on='extracted_cluster', how='left')       
+    clusters_df_data.drop(columns=['extracted_cluster'], inplace=True)
 
     with PdfPages(output_fig) as pdf:
         # Create a single figure with 6 subplots
@@ -137,7 +137,7 @@ def main():
             cluster_sig = pd.read_csv(cluster_sig_input, sep='\t')
             # Extract the part after the colon in the 'cluster' column
             cluster_sig['extracted_cluster'] = cluster_sig['cluster'].str.split(':').str[1]
-            #genes_df = cluster_sig[['extracted_cluster', 'p.adjust','genes']]
+            genes_df = cluster_sig[['extracted_cluster', 'p.adjust','genes']]
             cluster_sig_part = cluster_sig[['extracted_cluster', 'p.adjust']].drop_duplicates(subset=['extracted_cluster'], keep='first')
             # Count the number of rows with non-null values in the 'p.adjust' column
             non_null_count = cluster_sig_part['p.adjust'].notna().sum()
@@ -207,11 +207,6 @@ def main():
         pdf.savefig(fig)
         fig.savefig(output_fig_jpeg, format="jpeg", dpi=300)
         plt.close(fig)    
-    # Apply the function to each row and create a new column 'clu'
-    #clusters_df['clu'] = clusters_df.apply(lambda row: extract_unique_clusters(row, clusters_df), axis=1)
-    # Remove columns with 'cluster' in their names
-    #clusters_df = clusters_df.drop(columns=clusters_df.filter(like='cluster').columns)
-    #clusters_df['cluster'] = clusters_df.apply(lambda row: get_unique_clusters(row, clusters_df), axis=1)
     output = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/clusters_sum_table_' + version + '.txt'
     clusters_df_data.to_csv(output, sep="\t")
     output_file = main_dir + 'leafcutter_' + group_1 + '_' + group_2 + '/sum_table_' + version + '.txt'

@@ -3,7 +3,7 @@ import pandas as pd
 
 def assign_clusters_to_groups(df, junctionCol, startNumCol, min_psi=0.0):    
     print("Assigning cluster")
-    #df = df.reset_index(drop=False)
+    df = df.reset_index(drop=False)
     # Extract chromosome part
     df.loc[:, 'chrom'] = df[junctionCol].astype(str).str.split(':').str[0]
     # Sample columns (exclude metadata columns)
@@ -102,14 +102,14 @@ def main():
     minSamples = 2 #remove junctions with less than minSamples samples with minReads reads
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/'
     #human_mouse
-    groups = ['GSE115736', 'GSE116177']
-    species = ['h', 'm']
+    #groups = ['GSE115736', 'GSE116177']
+    #species = ['h', 'm']
     #human_human
     #groups = ['GSE115736', 'GSE60424']
     #species = ['h', 'h']
     #mouse_mouse
-    #groups = ['GSE116177', 'GSE180020']
-    #species = ['m', 'm']
+    groups = ['GSE116177', 'GSE180020']
+    species = ['m', 'm']
     ensembl_dir = main_dir + 'ensembl115/'
     input_file = ensembl_dir + "junctions_merge_" + groups[0] + "_" + groups[1] + "_" + version + ".txt"
     merged_df = pd.read_csv(input_file, sep="\t", index_col=0)

@@ -149,15 +149,15 @@ def main():
     #group_1 = 'GSE115736'
     #group_2 = 'GSE116177'
     #human_human
-    cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    main_col = 'junction_id' 
-    group_1 = 'GSE115736'
-    group_2 = 'GSE60424'
+    #cell_type = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #main_col = 'junction_id' 
+    #group_1 = 'GSE115736'
+    #group_2 = 'GSE60424'
     #mouse_mouse
-    # cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
-    # group_1 = 'GSE116177'
-    # group_2 = 'GSE180020'
-    # main_col = 'mouse_junction'
+    cell_type = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
+    main_col = 'junction_id' 
+    group_1 = 'GSE116177'
+    group_2 = 'GSE180020'
     
     main_dir = '/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_' + group_1 + '_' + group_2 + '/'
     sum_table_input = main_dir + 'clusters_sum_table_' + version + '.txt'
@@ -198,13 +198,16 @@ def main():
             #select the cluter and its introns in the same order in the count and persent db
             persent_cluster = percent_table.loc[percent_table['cluster'] == cluster]
             persent_cluster = persent_cluster.sort_values(by=['h_junction']) 
-            gene_name = sum_df.loc[sum_df['cluster'] == cluster, 'symbol_h'].values[0]
+            gene_name = sum_df.loc[sum_df['cluster'] == cluster, 'genes'].values[0]
             #persent_cluster.drop(columns=['ensembl','symbol','mouse_junction','cluster'], inplace = True)
             persent_cluster.drop(columns=['cluster'], inplace = True)
             value_cluster = value_table[value_table.index.isin(persent_cluster.index)]
             value_cluster = value_cluster.drop(columns=['cluster'])
             #plot fig
-            fig_title = one_cell + "_" + gene_name + "_" + cluster + "_" + comment
+            try:
+                fig_title = one_cell + "_" + gene_name + "_" + cluster + "_" + comment
+            except:
+                fig_title = one_cell + "_" + cluster + "_" + comment
             legend_color_map = plot_bar_2(persent_cluster, value_cluster, fig_title, main_dir, main_col, legend_color_map) 
             #fig_title = one_cell + "_" + gene_name
             #plot_bar_1(persent_cluster, fig_title, main_dir, main_col)

@@ -78,17 +78,17 @@ def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
     # Initialize an empty Index
     #junction_index = pd.Index([])
     #human_mouse
-    groups = ['GSE115736', 'GSE116177']
-    cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
-    cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
+    #groups = ['GSE115736', 'GSE116177']
+    #cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
+    #cell_type_group_2 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono', 'Neut']
     #human_human
     #groups = ['GSE115736', 'GSE60424']
     #cell_type_group_1 = ['CD4T', 'CD8T', 'NveB', 'NK', 'Mono', 'Neut']
     #cell_type_group_2 = ['CD4', 'CD8', 'Bcells', 'NK', 'Monocytes', 'Neutrophils']
     #mouse mouse
-    #groups = ['GSE116177', 'GSE180020']
-    #cell_type_group_1 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
-    #cell_type_group_2 = ['T.4', 'T.8', 'B.fo', 'NK', 'Mo']
+    groups = ['GSE116177', 'GSE180020']
+    cell_type_group_1 = ['CD4T', 'Cd8T', 'BCell', 'NK', 'Mono']
+    cell_type_group_2 = ['T_4', 'T_8', 'B_fo', 'NK', 'Mo']
     #human_mouse fibroblasts
     #group_1 = 'GSE121052'
     #group_2 = 'GSE161648'
@@ -168,6 +168,7 @@ def main():   #clu_7543, ptprc, need to be split to 2 in CD8T
                 #convert to perecent only if there are more than 0 reads in a col
                 col_sum = one_cluster[col].sum()
                 if col_sum > 0:
+                    one_cluster[col] = one_cluster[col].astype(float)
                     one_cluster.loc[:, col] = one_cluster[col] / one_cluster[col].sum()
                 else:
                     one_cluster.loc[:, col] = 0

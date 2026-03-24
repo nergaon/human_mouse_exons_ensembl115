@@ -366,14 +366,14 @@ def main():
     points_input = ensembl_dir + 'unique_points_' + version + '.txt' #all the ortholgs points
     points_df = pd.read_csv(points_input, sep='\t',index_col=0)
     #human_mouse
-    groups = ['GSE115736', 'GSE116177']
-    species = ['h', 'm']
+    #groups = ['GSE115736', 'GSE116177']
+    #species = ['h', 'm']
     #human_human
     #groups = ['GSE115736', 'GSE60424']
     #species = ['h', 'h']
     #mouse_mouse
-    #groups = ['GSE116177', 'GSE180020']
-    #species = ['m', 'm']
+    groups = ['GSE116177', 'GSE180020']
+    species = ['m', 'm']
     for i in range(len(groups)):
         oneGroup = groups[i]
         oneSpecies = species[i]

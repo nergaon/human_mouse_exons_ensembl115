@@ -10,13 +10,13 @@ AS_value="AS_clusters_value_${version}.txt"
 #leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl114/junctions/leafcutter_GSE121052_GSE161648/Fibroblast")
 #leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl114/junctions/leafcutter_E-MTAB-5919_human_E-MTAB-5919_mouse/Fibroblast")
 #human mouse
-leafcutter_folders=(
-  "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/CD4T"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/CD8T"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NveB"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NK"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Mono"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Neut")
+#leafcutter_folders=(
+#  "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/CD4T"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/CD8T"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NveB"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/NK"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Mono"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE116177/Neut")
 
 #human human
 #leafcutter_folders=(
@@ -28,12 +28,12 @@ leafcutter_folders=(
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE115736_GSE60424/Neut")
 
 #mouse mouse
-#leafcutter_folders=(
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/CD4T"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Cd8T"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/BCell"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/NK"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Mono")
+leafcutter_folders=(
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/CD4T"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Cd8T"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/BCell"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/NK"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/leafcutter_GSE116177_GSE180020/Mono")
 
 leafcutter_scripts="/gpfs0/tals/projects/software/leafcutter_0.2.9"
 
