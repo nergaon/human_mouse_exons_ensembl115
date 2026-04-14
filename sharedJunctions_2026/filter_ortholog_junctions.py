@@ -15,6 +15,28 @@ import csv
 from pathlib import Path
 
 
+def _parse_count(value: str) -> float:
+    """Parse a junction count value, supporting plain numbers and 'count/total'."""
+    text = value.strip()
+    if not text:
+        return 0.0
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def passes_expression_filter(row: list[str], min_reads: float, min_samples: int) -> bool:
+    """Return True when at least min_samples sample columns have >= min_reads."""
+    if min_samples <= 0 or min_reads <= 0:
+        return True
+    sample_values = row[1:]
+    passing = sum(1 for value in sample_values if _parse_count(value) >= min_reads)
+    return passing >= min_samples
+
+
 def load_position_map(points_path: Path, source_col: str, target_col: str) -> dict[str, str]:
     """Load point mapping from source_col to target_col from unique_points_HN6.txt."""
     mapping: dict[str, str] = {}
@@ -78,13 +100,21 @@ def filter_and_remap_junctions(
     input_tsv: Path,
     output_tsv: Path,
     position_map: dict[str, str],
-) -> tuple[int, int]:
+    express_output_tsv: Path | None,
+    min_reads: float,
+    min_samples: int,
+) -> tuple[int, int, int]:
     kept = 0
+    express_kept = 0
     total = 0
 
     with input_tsv.open("r", newline="") as fin, output_tsv.open("w", newline="") as fout:
         reader = csv.reader(fin, delimiter="\t")
         writer = csv.writer(fout, delimiter="\t", lineterminator="\n")
+        express_fout = express_output_tsv.open("w", newline="") if express_output_tsv else None
+        express_writer = (
+            csv.writer(express_fout, delimiter="\t", lineterminator="\n") if express_fout else None
+        )
 
         header = next(reader, None)
         if header is None:
@@ -92,35 +122,57 @@ def filter_and_remap_junctions(
         if not header or header[0] != "junction_id":
             raise ValueError(f"First column must be junction_id in file: {input_tsv}")
 
-        writer.writerow(header)
+        output_header = [*header, "original_junction_id"]
+        writer.writerow(output_header)
+        if express_writer:
+            express_writer.writerow(output_header)
 
         for row in reader:
             total += 1
             if not row:
                 continue
 
-            remapped_id = remap_junction_id(row[0], position_map)
+            original_junction_id = row[0]
+            remapped_id = remap_junction_id(original_junction_id, position_map)
             if remapped_id is None:
                 continue
 
-            row[0] = remapped_id
-            writer.writerow(row)
+            out_row = row.copy()
+            out_row[0] = remapped_id
+            out_row.append(original_junction_id)
+
+            writer.writerow(out_row)
             kept += 1
 
-    return total, kept
+            if express_writer and passes_expression_filter(row, min_reads, min_samples):
+                express_writer.writerow(out_row)
+                express_kept += 1
+
+        if express_fout:
+            express_fout.close()
+
+    return total, kept, express_kept
 
 
 def filter_junctions(
     input_tsv: Path,
     output_tsv: Path,
     valid_points: set[str],
-) -> tuple[int, int]:
+    express_output_tsv: Path | None,
+    min_reads: float,
+    min_samples: int,
+) -> tuple[int, int, int]:
     kept = 0
+    express_kept = 0
     total = 0
 
     with input_tsv.open("r", newline="") as fin, output_tsv.open("w", newline="") as fout:
         reader = csv.reader(fin, delimiter="\t")
         writer = csv.writer(fout, delimiter="\t", lineterminator="\n")
+        express_fout = express_output_tsv.open("w", newline="") if express_output_tsv else None
+        express_writer = (
+            csv.writer(express_fout, delimiter="\t", lineterminator="\n") if express_fout else None
+        )
 
         header = next(reader, None)
         if header is None:
@@ -129,6 +181,8 @@ def filter_junctions(
             raise ValueError(f"First column must be junction_id in file: {input_tsv}")
 
         writer.writerow(header)
+        if express_writer:
+            express_writer.writerow(header)
 
         for row in reader:
             total += 1
@@ -137,8 +191,14 @@ def filter_junctions(
             if filter_junction_id(row[0], valid_points):
                 writer.writerow(row)
                 kept += 1
+                if express_writer and passes_expression_filter(row, min_reads, min_samples):
+                    express_writer.writerow(row)
+                    express_kept += 1
 
-    return total, kept
+        if express_fout:
+            express_fout.close()
+
+    return total, kept, express_kept
 
 
 def main() -> None:
@@ -179,10 +239,29 @@ def main() -> None:
         required=True,
         help="Output TSV files (same number and order as --inputs)",
     )
+    parser.add_argument(
+        "--express-outputs",
+        nargs="+",
+        help="Optional expression-filtered outputs (same number and order as --inputs)",
+    )
+    parser.add_argument(
+        "--min-reads",
+        type=float,
+        default=10.0,
+        help="Minimum reads in a sample for expression filtering (default: 10)",
+    )
+    parser.add_argument(
+        "--min-samples",
+        type=int,
+        default=2,
+        help="Minimum number of samples meeting --min-reads (default: 2)",
+    )
     args = parser.parse_args()
 
     if len(args.inputs) != len(args.outputs):
         raise ValueError("--inputs and --outputs must have the same number of files")
+    if args.express_outputs and len(args.inputs) != len(args.express_outputs):
+        raise ValueError("--inputs and --express-outputs must have the same number of files")
     if args.mode == "remap" and args.source_column == args.target_column:
         raise ValueError("--source-column and --target-column must be different")
 
@@ -192,16 +271,39 @@ def main() -> None:
     else:
         valid_points = set(load_position_map(points_path, args.source_column, args.source_column).keys())
 
-    for in_path_str, out_path_str in zip(args.inputs, args.outputs):
+    for idx, (in_path_str, out_path_str) in enumerate(zip(args.inputs, args.outputs)):
         in_path = Path(in_path_str)
         out_path = Path(out_path_str)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        express_out_path = None
+        if args.express_outputs:
+            express_out_path = Path(args.express_outputs[idx])
+            express_out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if args.mode == "remap":
-            total, kept = filter_and_remap_junctions(in_path, out_path, position_map)
+            total, kept, express_kept = filter_and_remap_junctions(
+                in_path,
+                out_path,
+                position_map,
+                express_out_path,
+                args.min_reads,
+                args.min_samples,
+            )
         else:
-            total, kept = filter_junctions(in_path, out_path, valid_points)
+            total, kept, express_kept = filter_junctions(
+                in_path,
+                out_path,
+                valid_points,
+                express_out_path,
+                args.min_reads,
+                args.min_samples,
+            )
         print(f"{in_path} -> {out_path}: kept {kept}/{total} junctions")
+        if express_out_path:
+            print(
+                f"{in_path} -> {express_out_path}: kept {express_kept}/{kept} "
+                f"junctions with >= {args.min_reads} reads in >= {args.min_samples} samples"
+            )
 
 
 if __name__ == "__main__":

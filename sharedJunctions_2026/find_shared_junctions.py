@@ -4,31 +4,102 @@
 import csv
 import sys
 from pathlib import Path
-from collections import defaultdict
+
+
+def normalize_junction_id(junction_id):
+    """Normalize junction by sorting start/end so reversed breakpoints match."""
+    parts = str(junction_id).split(":")
+    if len(parts) < 3:
+        return str(junction_id)
+
+    chrom, start, end = parts[0], parts[1], parts[2]
+    tail = parts[3:]
+
+    try:
+        start_val = int(start)
+        end_val = int(end)
+        if start_val <= end_val:
+            ordered_start, ordered_end = start, end
+        else:
+            ordered_start, ordered_end = end, start
+    except ValueError:
+        if start <= end:
+            ordered_start, ordered_end = start, end
+        else:
+            ordered_start, ordered_end = end, start
+
+    return ":".join([chrom, ordered_start, ordered_end] + tail)
+
+
+def _parse_count(value):
+    """Parse numeric count values, supporting plain numbers and 'count/total'."""
+    text = str(value).strip()
+    if not text:
+        return 0
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    return int(float(text))
+
+
+def _is_count_like(value):
+    """Return True if value can be parsed as a count (or is empty)."""
+    text = str(value).strip()
+    if not text:
+        return True
+    try:
+        _parse_count(text)
+        return True
+    except ValueError:
+        return False
 
 
 def load_junctions(file_path):
-    """Load junctions from a TSV file and return dict: junction_id -> [read_counts]."""
+    """Load junctions and return normalized-key counts plus original labels."""
     junctions = {}
+    original_labels = {}
     with open(file_path, "r", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        if reader.fieldnames is None:
+        reader = csv.reader(fh, delimiter="\t")
+        header = next(reader, None)
+        if header is None:
             raise ValueError(f"Empty file: {file_path}")
-        
-        sample_names = reader.fieldnames[1:]  # Skip junction_id column
-        
-        for row in reader:
-            junction_id = row["junction_id"]
+        if not header or header[0] != "junction_id":
+            raise ValueError(f"First column must be junction_id in file: {file_path}")
+
+        rows = list(reader)
+
+        # Keep only columns that are count-like in every row; this drops metadata
+        # columns such as original_junction_id appended at the end.
+        numeric_col_indices = []
+        for idx in range(1, len(header)):
+            is_numeric_col = True
+            for row in rows:
+                value = row[idx] if idx < len(row) else ""
+                if not _is_count_like(value):
+                    is_numeric_col = False
+                    break
+            if is_numeric_col:
+                numeric_col_indices.append(idx)
+
+        sample_names = [header[idx] for idx in numeric_col_indices]
+
+        for row in rows:
+            if not row:
+                continue
+            junction_id = row[0]
+            normalized_id = normalize_junction_id(junction_id)
             read_counts = []
-            for sample in sample_names:
+            for idx in numeric_col_indices:
+                value = row[idx] if idx < len(row) else ""
                 try:
-                    count = int(row[sample])
-                except (ValueError, KeyError):
+                    count = _parse_count(value)
+                except ValueError:
                     count = 0
                 read_counts.append(count)
-            junctions[junction_id] = read_counts
+            if normalized_id not in junctions:
+                junctions[normalized_id] = read_counts
+                original_labels[normalized_id] = junction_id
     
-    return junctions, sample_names
+    return junctions, sample_names, original_labels
 
 
 def has_min_coverage(read_counts, min_reads=10, min_samples=2):
@@ -50,7 +121,10 @@ def find_shared_junctions(input_dir, min_reads=10, min_samples=2, output_file=No
         Tuple of (shared_junctions dict, all_filenames)
     """
     input_path = Path(input_dir)
-    tsv_files = sorted(input_path.glob("GSE*.tsv"))
+    tsv_files = sorted(
+        p for p in input_path.glob("GSE*_orthologs_junctions.tsv")
+        if "express" not in p.name
+    )
     
     if not tsv_files:
         print(f"Error: No TSV files found in {input_dir}", file=sys.stderr)
@@ -61,41 +135,47 @@ def find_shared_junctions(input_dir, min_reads=10, min_samples=2, output_file=No
         print(f"  {f.name}", file=sys.stderr)
     
     # Load all junctions from all files
-    all_junctions = {}  # file_name -> {junction_id -> [read_counts]}
+    all_junctions = {}  # file_name -> {normalized_junction_id -> [read_counts]}
+    all_original_labels = {}  # file_name -> {normalized_junction_id -> original junction_id}
     all_sample_names = {}  # file_name -> [sample_names]
     
     for tsv_file in tsv_files:
         print(f"Loading {tsv_file.name}...", file=sys.stderr)
-        junctions, samples = load_junctions(tsv_file)
+        junctions, samples, original_labels = load_junctions(tsv_file)
         all_junctions[tsv_file.name] = junctions
+        all_original_labels[tsv_file.name] = original_labels
         all_sample_names[tsv_file.name] = samples
         print(f"  {len(junctions)} junctions, {len(samples)} samples", file=sys.stderr)
     
-    # Find junctions present in all files
+    # Find normalized junctions present in all files
     file_names = list(all_junctions.keys())
-    first_file_junctions = set(all_junctions[file_names[0]].keys())
+    reference_file = next((name for name in file_names if name.startswith("GSE115736")), file_names[0])
+    first_file_junctions = set(all_junctions[reference_file].keys())
     
-    shared_junction_ids = first_file_junctions.copy()
-    for fname in file_names[1:]:
-        shared_junction_ids &= set(all_junctions[fname].keys())
+    shared_junction_keys = first_file_junctions.copy()
+    for fname in file_names:
+        if fname == reference_file:
+            continue
+        shared_junction_keys &= set(all_junctions[fname].keys())
     
-    print(f"\nJunctions in all {len(file_names)} files: {len(shared_junction_ids)}", file=sys.stderr)
+    print(f"\nJunctions in all {len(file_names)} files: {len(shared_junction_keys)}", file=sys.stderr)
     
     # Filter by coverage criterion: >= min_reads in >= min_samples in at least one file
     filtered_shared = {}
-    for junction_id in shared_junction_ids:
+    for junction_key in shared_junction_keys:
         # Check if this junction passes the coverage threshold in any file
         passes = False
         for fname in file_names:
-            read_counts = all_junctions[fname][junction_id]
+            read_counts = all_junctions[fname][junction_key]
             if has_min_coverage(read_counts, min_reads, min_samples):
                 passes = True
                 break
         
         if passes:
+            reference_junction_id = all_original_labels[reference_file].get(junction_key, junction_key)
             # Store the junction with all its data from all files
-            filtered_shared[junction_id] = {
-                fname: all_junctions[fname][junction_id]
+            filtered_shared[reference_junction_id] = {
+                fname: all_junctions[fname][junction_key]
                 for fname in file_names
             }
     
@@ -114,8 +194,9 @@ def find_shared_junctions(input_dir, min_reads=10, min_samples=2, output_file=No
                 all_samples.extend(all_sample_names[fname])
             
             writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
-            header = ["junction_id"] + [f"{fname.replace('.tsv', '')}_{s}" 
-                                        for fname in file_names 
+            header = ["junction_id"] + [
+                                        f"{fname.replace('.tsv', '').replace('_orthologs_junctions', '')}_{s}"
+                                        for fname in file_names
                                         for s in all_sample_names[fname]]
             writer.writerow(header)
             

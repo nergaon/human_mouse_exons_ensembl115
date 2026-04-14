@@ -13,6 +13,8 @@ INPUT_GSE115736="/gpfs0/tals/projects/Analysis/human_mouse_exons/GSE115736/leafc
 
 DATASETS="both"      # GSE116177 | GSE180020 | GSE60424 | GSE115736 | both
 DIRECTION="m2h"      # m2h | h2m | human-filter | both
+MIN_READS=10
+MIN_SAMPLES=2
 DRY_RUN=0
 
 usage() {
@@ -26,6 +28,8 @@ Options:
   --points PATH         Path to unique_points_HN6.txt
   --python-script PATH  Path to filter_ortholog_junctions.py
   --out-dir PATH        Output directory for generated TSVs
+  --min-reads N         Minimum reads per sample for express filter (default: 10)
+  --min-samples N       Minimum number of samples passing --min-reads (default: 2)
   --dry-run             Print commands without executing
   -h, --help            Show this help
 
@@ -62,6 +66,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir)
       OUT_DIR="$2"
+      shift 2
+      ;;
+    --min-reads)
+      MIN_READS="$2"
+      shift 2
+      ;;
+    --min-samples)
+      MIN_SAMPLES="$2"
       shift 2
       ;;
     --dry-run)
@@ -111,7 +123,7 @@ mkdir -p "$OUT_DIR"
 run_one() {
   local dataset="$1"
   local direction="$2"
-  local input_file mode source_col target_col output_file
+  local input_file mode source_col target_col output_file express_output_file
 
   if [[ "$dataset" == "GSE116177" ]]; then
     input_file="$INPUT_GSE116177"
@@ -131,16 +143,19 @@ run_one() {
     source_col="position_m"
     target_col="position_h"
     output_file="${OUT_DIR}/${dataset}_orthologs_junctions.tsv"
+    express_output_file="${OUT_DIR}/${dataset}_express_orthologs_junctions.tsv"
   elif [[ "$direction" == "h2m" ]]; then
     mode="remap"
     source_col="position_h"
     target_col="position_m"
     output_file="${OUT_DIR}/${dataset}_mouseMapped_junctions.tsv"
+    express_output_file="${OUT_DIR}/${dataset}_express_mouseMapped_junctions.tsv"
   else
     mode="filter-only"
     source_col="position_h"
     target_col="position_h"
     output_file="${OUT_DIR}/${dataset}_orthologs_junctions.tsv"
+    express_output_file="${OUT_DIR}/${dataset}_express_orthologs_junctions.tsv"
   fi
 
   cmd=(
@@ -150,6 +165,9 @@ run_one() {
     --source-column "$source_col"
     --inputs "$input_file"
     --outputs "$output_file"
+    --express-outputs "$express_output_file"
+    --min-reads "$MIN_READS"
+    --min-samples "$MIN_SAMPLES"
   )
 
   if [[ "$mode" == "remap" ]]; then
@@ -163,6 +181,23 @@ run_one() {
   else
     "${cmd[@]}"
   fi
+}
+
+is_pair_compatible() {
+  local dataset="$1"
+  local direction="$2"
+
+  case "$direction" in
+    m2h)
+      [[ "$dataset" == "GSE116177" || "$dataset" == "GSE180020" ]]
+      ;;
+    h2m|human-filter)
+      [[ "$dataset" == "GSE60424" || "$dataset" == "GSE115736" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 datasets_to_run=()
@@ -185,10 +220,23 @@ else
   directions_to_run=("$DIRECTION")
 fi
 
+ran_jobs=0
 for ds in "${datasets_to_run[@]}"; do
   for dir in "${directions_to_run[@]}"; do
+    if ! is_pair_compatible "$ds" "$dir"; then
+      echo "Skipping incompatible pair: dataset=${ds}, direction=${dir}" >&2
+      continue
+    fi
     run_one "$ds" "$dir"
+    ((ran_jobs+=1))
   done
 done
+
+if [[ ${ran_jobs:-0} -eq 0 ]]; then
+  echo "No compatible dataset/direction pairs were selected." >&2
+  echo "For m2h use: GSE116177 or GSE180020." >&2
+  echo "For h2m/human-filter use: GSE60424 or GSE115736." >&2
+  exit 1
+fi
 
 echo "Done. Outputs are in: $OUT_DIR"

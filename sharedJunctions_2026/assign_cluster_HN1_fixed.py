@@ -1,6 +1,42 @@
 import networkx as nx
 import pandas as pd
 
+
+def format_leafcutter_sample_name(column_name):
+    """Convert dataset_sample names to sample_dataset format."""
+    parts = str(column_name).split('_', 1)
+    if len(parts) != 2:
+        return str(column_name)
+    dataset, sample_name = parts
+    return f'{sample_name}_{dataset}'
+
+
+def format_leafcutter_junction_id(junction_id, cluster_id):
+    """Convert chr:start:end:strand into chr:start:end:cluster for Leafcutter."""
+    parts = str(junction_id).split(':')
+    if len(parts) < 3:
+        return f'{junction_id}:{cluster_id}'
+    return ':'.join(parts[:3] + [str(cluster_id)])
+
+
+def write_leafcutter_value_file(df_as, output_file):
+    """Write AS clusters in Leafcutter-compatible value table format."""
+    if df_as.empty:
+        print('No AS clusters to export in Leafcutter format.')
+        return
+
+    sample_cols = [col for col in df_as.columns if col != 'cluster']
+    leafcutter_df = df_as[sample_cols].copy()
+    leafcutter_df.columns = [format_leafcutter_sample_name(col) for col in sample_cols]
+    leafcutter_df.index = [
+        format_leafcutter_junction_id(junction_id, cluster_id)
+        for junction_id, cluster_id in zip(df_as.index, df_as['cluster'])
+    ]
+    leafcutter_df.index.name = None
+    leafcutter_df = leafcutter_df.astype(float)
+    leafcutter_df.to_csv(output_file, sep='\t', index=True)
+    print(f'Wrote Leafcutter value table to {output_file}')
+
 def assign_clusters_to_groups(df, junctionCol, startNumCol, min_psi=0.0):    
     print("Assigning clusters...")
     df = df.reset_index(drop=False)
@@ -113,10 +149,9 @@ def main():
     output_file = ensembl_dir + "sharedJunctions_2026/shared_junctions_cluster_all.tsv"
     junction_sum_final.to_csv(output_file, sep="\t")
     print(f"Wrote all clusters to {output_file}")
-    
-    output_file_AS = ensembl_dir + "sharedJunctions_2026/shared_junctions_cluster_AS.tsv"
-    junction_AS.to_csv(output_file_AS, sep="\t")
-    print(f"Wrote AS junctions (clusters with >1 junction) to {output_file_AS}")
+
+    output_file_leafcutter = ensembl_dir + "sharedJunctions_2026/AS_clusters_value_HN6.txt"
+    write_leafcutter_value_file(junction_AS, output_file_leafcutter)
     
     num_clusters = junction_AS['cluster'].nunique()
     num_as_junctions = len(junction_AS)
