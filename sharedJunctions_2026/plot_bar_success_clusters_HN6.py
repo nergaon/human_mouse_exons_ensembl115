@@ -25,8 +25,8 @@ import pandas as pd
 
 
 DEFAULT_BASE_DIR = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026")
-DEFAULT_VALUE_FILE = DEFAULT_BASE_DIR / "AS_clusters_value_HN6.txt"
-
+#DEFAULT_VALUE_FILE = DEFAULT_BASE_DIR / "AS_clusters_value_HN6.txt"
+DEFAULT_VALUE_FILE = DEFAULT_BASE_DIR / "AS_clusters_value_fibroblast_HN6.txt"
 
 def create_color_map(intron_legend: List[str], legend_color_map: Dict[str, tuple]) -> Dict[str, tuple]:
     """Create/update a stable color map for introns across plots."""
@@ -46,17 +46,13 @@ def create_color_map(intron_legend: List[str], legend_color_map: Dict[str, tuple
     return legend_color_map
 
 
-def simplify_sample_labels(sample_names: List[str]) -> List[str]:
-    """Drop trailing replicate token and simplify condition names for plotting labels."""
-    labels = ["_".join(s.split("_")[:-1]) if "_" in s else s for s in sample_names]
-    labels = [
-        "mock" if "mock" in str(x).lower() else ("SARS-CoV" if "sars-cov" in str(x).lower() else x)
-        for x in labels
-    ]
-    return labels
-
-
 def extract_dataset_id(sample_name: str) -> str:
+    upper_name = sample_name.upper()
+    if upper_name.startswith("HS"):
+        return "HS"
+    if upper_name.startswith("MM"):
+        return "MM"
+
     match = re.search(r"(GSE\d+)$", sample_name)
     return match.group(1) if match else ""
 
@@ -82,15 +78,15 @@ def build_positions_by_dataset(
 
 
 def build_xtick_labels(sample_names: List[str]) -> List[str]:
-    """Show only one x-axis label per dataset block (e.g., GSE115736, GSE116177)."""
+    """Show one label per contiguous sample group block (e.g. HS ... MM)."""
     out = [" " for _ in sample_names]
-    prev_ds = None
+    prev_group = None
 
     for i, sample_name in enumerate(sample_names):
-        ds = extract_dataset_id(sample_name)
-        if ds != prev_ds:
-            out[i] = ds if ds else " "
-            prev_ds = ds
+        group = extract_dataset_id(sample_name)
+        if group != prev_group:
+            out[i] = group if group else " "
+            prev_group = group
 
     return out
 
@@ -153,7 +149,7 @@ def plot_cluster_bars(
     ax1.set_ylabel("PSI")
 
     ax2.set_xticks(r)
-    ax2.set_xticklabels(labels, fontsize=9, rotation=0)
+    ax2.set_xticklabels(labels, fontsize=8, rotation=45, ha="right")
     ax2.tick_params(axis="x", which="both", length=0)
     ax2.set_ylabel("Counts")
 
@@ -186,12 +182,32 @@ def load_as_value_table(value_file: Path) -> pd.DataFrame:
     return df
 
 
+def iter_cell_units(comp_dir: Path) -> List[tuple[str, Path, Path, Path]]:
+    """Return processing units as (cell_name, output_dir, groups_file, sig_file)."""
+    units: List[tuple[str, Path, Path, Path]] = []
+
+    # Standard layout: one folder per cell type.
+    for cell_dir in sorted([d for d in comp_dir.iterdir() if d.is_dir() and d.name != "genes_figs"]):
+        groups_file = cell_dir / "groups_file.txt"
+        sig_file = cell_dir / "leafcutter_ds_cluster_significance.txt"
+        if groups_file.exists() and sig_file.exists():
+            units.append((cell_dir.name, cell_dir, groups_file, sig_file))
+
+    # EMTAB layout: files are directly in comparison root (no cell subfolders).
+    root_groups = comp_dir / "groups_file.txt"
+    root_sig = comp_dir / "leafcutter_ds_cluster_significance.txt"
+    if root_groups.exists() and root_sig.exists():
+        units.append(("Fibroblast", comp_dir / "Fibroblast", root_groups, root_sig))
+
+    return units
+
+
 def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> None:
     counts_df = load_as_value_table(value_file)
 
-    comparison_dirs = sorted([p for p in base_dir.iterdir() if p.is_dir() and p.name.startswith("leafcutter_GSE")])
+    comparison_dirs = sorted([p for p in base_dir.iterdir() if p.is_dir() and p.name.startswith("leafcutter_")])
     if not comparison_dirs:
-        raise FileNotFoundError(f"No leafcutter_GSE* folders found in {base_dir}")
+        raise FileNotFoundError(f"No leafcutter_* folders found in {base_dir}")
 
     for comp_dir in comparison_dirs:
         print(f"Processing comparison: {comp_dir.name}")
@@ -200,14 +216,8 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
             shutil.rmtree(genes_figs_root)
         genes_figs_root.mkdir(parents=True, exist_ok=True)
 
-        for cell_dir in sorted([d for d in comp_dir.iterdir() if d.is_dir() and d.name != "genes_figs"]):
-            groups_file = cell_dir / "groups_file.txt"
-            sig_file = cell_dir / "leafcutter_ds_cluster_significance.txt"
-
-            if not groups_file.exists() or not sig_file.exists():
-                continue
-
-            print(f"  Cell type: {cell_dir.name}")
+        for cell_name, out_dir, groups_file, sig_file in iter_cell_units(comp_dir):
+            print(f"  Cell type: {cell_name}")
 
             # groups_file can be tab or space separated; use regex whitespace.
             group_df = pd.read_csv(groups_file, sep=r"\s+", header=None, names=["sample", "condition"], engine="python")
@@ -228,7 +238,7 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
             if max_clusters > 0:
                 success_clusters = success_clusters[:max_clusters]
 
-            out_dir = genes_figs_root / cell_dir.name
+            out_dir = genes_figs_root / out_dir.name
             out_dir.mkdir(parents=True, exist_ok=True)
 
             legend_color_map: Dict[str, tuple] = {}
@@ -252,7 +262,7 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
                     p_raw = row.get("p.adjust", np.nan)
                     p_adjust = f"{float(p_raw):.3g}" if pd.notna(p_raw) else "NA"
 
-                title = f"{cell_dir.name}_{gene_name}_{cluster}_p={p_adjust}" if gene_name else f"{cell_dir.name}_{cluster}_p={p_adjust}"
+                title = f"{cell_name}_{gene_name}_{cluster}_p={p_adjust}" if gene_name else f"{cell_name}_{cluster}_p={p_adjust}"
                 legend_color_map = plot_cluster_bars(psi_cluster, val_cluster, title, out_dir, legend_color_map)
                 plotted += 1
 
@@ -261,7 +271,7 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plot stacked PSI and counts bars for Success clusters.")
-    parser.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR, help="Directory containing leafcutter_GSE* folders")
+    parser.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR, help="Directory containing leafcutter_* folders")
     parser.add_argument("--value-file", type=Path, default=DEFAULT_VALUE_FILE, help="AS cluster value file")
     parser.add_argument("--clean", action="store_true", help="Remove existing genes_figs output before plotting")
     parser.add_argument("--max-clusters", type=int, default=0, help="Limit plots per cell type (0 = all)")

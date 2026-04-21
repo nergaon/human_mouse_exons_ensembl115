@@ -5,16 +5,19 @@ source /gpfs0/tals/projects/software/anaconda3/etc/profile.d/conda.sh
 conda activate leafcutter
 
 version=$1
-AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_${version}.txt"
-
+#AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_${version}.txt"
+AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_fibroblast_${version}.txt"
 #human mouse
-leafcutter_folders=(
-  "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/CD4T"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/CD8T"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/NveB"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/NK"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/Mono"
-	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/Neut")
+#leafcutter_folders=(
+#  "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/CD4T"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/CD8T"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/NveB"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/NK"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/Mono"
+#	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/Neut")
+
+#human mouse fibroblast
+leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_EMTAB5919H_EMTAB5919M/")
 
 #human human
 #leafcutter_folders=(

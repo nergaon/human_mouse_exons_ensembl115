@@ -10,7 +10,7 @@ Columns: h_junction, m_junction, symbol_h, ensembl_h, rank_h, rank_m, cluster, g
 import csv
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 try:
     import matplotlib.pyplot as plt
@@ -20,6 +20,38 @@ except ModuleNotFoundError:
 SHARED_JUNCTIONS_DIR = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026")
 METADATA_FILE = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/unique_points_HN6.txt")
 VALUE_FILE = SHARED_JUNCTIONS_DIR / "AS_clusters_value_HN6.txt"
+FIBRO_VALUE_FILE = SHARED_JUNCTIONS_DIR / "AS_clusters_value_fibroblast_HN6.txt"
+
+COMPARISON_LABELS: Dict[Tuple[str, str], str] = {
+    ("GSE115736", "GSE116177"): "Human vs Mouse",
+    ("GSE115736", "GSE60424"): "Human vs Human",
+    ("GSE116177", "GSE180020"): "Mouse vs Mouse",
+}
+
+
+def _normalize_pair(dataset_a: str, dataset_b: str) -> Tuple[str, str]:
+    return tuple(sorted((dataset_a, dataset_b)))
+
+
+def _comparison_title(dataset_a: str, dataset_b: str) -> str:
+    key = _normalize_pair(dataset_a, dataset_b)
+    return COMPARISON_LABELS.get(key, f"{dataset_a} vs {dataset_b}")
+
+
+def _display_cell_name(cell_type: str, dataset_a: str, dataset_b: str) -> str:
+    """Normalize display names for specific comparisons."""
+    pair = _normalize_pair(dataset_a, dataset_b)
+    if cell_type == "Cd8T":
+        return "CD8T"
+    if pair == _normalize_pair("GSE116177", "GSE180020") and cell_type == "BCell":
+        return "NveB"
+    return cell_type
+
+
+def _value_file_for_pair(dataset_a: str, dataset_b: str) -> Path:
+    if _normalize_pair(dataset_a, dataset_b) == _normalize_pair("EMTAB5919H", "EMTAB5919M"):
+        return FIBRO_VALUE_FILE
+    return VALUE_FILE
 
 
 def load_metadata(metadata_file: Path) -> Dict[str, Dict]:
@@ -73,6 +105,7 @@ def load_junctions_with_as_averages(
 ) -> List[Dict]:
     """Load junction rows and compute avg expression per (dataset, cell_type) from AS value file."""
     junctions = []
+    is_fibro_pair = _normalize_pair(dataset_a, dataset_b) == _normalize_pair("EMTAB5919H", "EMTAB5919M")
 
     with value_file.open("r", newline="") as fh:
         reader = csv.reader(fh, delimiter="\t")
@@ -85,13 +118,21 @@ def load_junctions_with_as_averages(
         valid_cell_types = set(cell_types)
         for col_idx, sample_name in enumerate(header[1:], start=1):
             dataset = parse_dataset(sample_name)
-            if dataset not in {dataset_a, dataset_b}:
-                continue
-
             candidates = infer_celltype_candidates(sample_name)
             mapped_cell = next((ct for ct in candidates if ct in valid_cell_types), "")
-            if mapped_cell:
+
+            if dataset in {dataset_a, dataset_b} and mapped_cell:
                 sample_mappings.append((col_idx, dataset, mapped_cell))
+                continue
+
+            # Fibroblast merged matrix uses HS*/MM* sample names, not *_GSE* names.
+            if is_fibro_pair and "Fibroblast" in valid_cell_types:
+                upper_name = sample_name.upper()
+                if upper_name.startswith("HS"):
+                    sample_mappings.append((col_idx, "EMTAB5919H", "Fibroblast"))
+                elif upper_name.startswith("MM"):
+                    sample_mappings.append((col_idx, "EMTAB5919M", "Fibroblast"))
+
 
         for row in reader:
             if not row:
@@ -302,39 +343,72 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
     }
 
 
-def write_sum_table_and_stacked_bar(leafcutter_dir: Path, dataset_a: str, dataset_b: str) -> None:
-    """Write sum_table_HN6.txt (last 5 rows) and a stacked success/sig bar plot."""
-    cell_dirs = sorted([
-        d for d in leafcutter_dir.iterdir()
-        if d.is_dir()
-        and d.name != "genes_figs"
-        and (d / "leafcutter_ds_cluster_significance.txt").exists()
-        and (d / "leafcutter_ds_effect_sizes.txt").exists()
-    ])
+def collect_leafcutter_units(leafcutter_dir: Path) -> List[Tuple[str, Path, Path]]:
+    """Collect processable units as (cell_type, sig_file, effect_file).
+
+    Standard layout has one subfolder per cell type. Some folders (e.g. fibroblast)
+    provide files directly at leafcutter root; these are treated as one pseudo cell
+    type named "Fibroblast".
+    """
+    units: List[Tuple[str, Path, Path]] = []
+
+    for d in sorted(
+        p for p in leafcutter_dir.iterdir()
+        if p.is_dir() and p.name != "genes_figs"
+    ):
+        sig_file = d / "leafcutter_ds_cluster_significance.txt"
+        effect_file = d / "leafcutter_ds_effect_sizes.txt"
+        if sig_file.exists() and effect_file.exists():
+            units.append((d.name, sig_file, effect_file))
+
+    root_sig = leafcutter_dir / "leafcutter_ds_cluster_significance.txt"
+    root_eff = leafcutter_dir / "leafcutter_ds_effect_sizes.txt"
+    if root_sig.exists() and root_eff.exists():
+        units.append(("Fibroblast", root_sig, root_eff))
+
+    return units
+
+
+def write_sum_table_and_stacked_bar(
+    leafcutter_dir: Path,
+    dataset_a: str,
+    dataset_b: str,
+    extra_cells: Optional[Dict[str, Dict[str, int]]] = None,
+) -> Dict[str, Dict[str, int]]:
+    """Write sum_table_HN6.txt and return per-cell summary counts for plotting."""
+    units = collect_leafcutter_units(leafcutter_dir)
 
     cell_types: List[str] = []
     summary_by_cell: Dict[str, Dict[str, int]] = {}
-    for cell_dir in cell_dirs:
-        cell_type = cell_dir.name
+    for cell_type, sig_file, effect_file in units:
         cell_types.append(cell_type)
-        summary_by_cell[cell_type] = summarize_leafcutter_celltype(cell_dir)
+        summary_by_cell[cell_type] = summarize_leafcutter_celltype(sig_file.parent)
+
+    if extra_cells:
+        for ct, summary in extra_cells.items():
+            if ct not in summary_by_cell:
+                cell_types.append(ct)
+            summary_by_cell[ct] = summary
 
     # Prefer dataset-specific order for readability in outputs.
     dataset_pair = {dataset_a, dataset_b}
     if dataset_pair == {"GSE116177", "GSE180020"}:
-        preferred_order = ["CD4T", "Cd8T", "BCell", "Mono"]
+        preferred_order = ["CD4T", "Cd8T", "BCell", "NK", "Mono"]
+    elif dataset_pair == {"GSE115736", "GSE116177"}:
+        preferred_order = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"]
     else:
         preferred_order = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut"]
 
     display_cell_types = [ct for ct in preferred_order if ct in summary_by_cell] + [
         ct for ct in cell_types if ct not in preferred_order
     ]
+    display_labels = [_display_cell_name(ct, dataset_a, dataset_b) for ct in display_cell_types]
 
     # Write table matching the "last 5 rows" format
     sum_table = leafcutter_dir / "sum_table_HN6.txt"
     with sum_table.open("w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        writer.writerow(["", "All"] + display_cell_types)
+        writer.writerow(["", "All"] + display_labels)
 
         rows = [
             ("Leafcutter success clusters", "success"),
@@ -352,6 +426,21 @@ def write_sum_table_and_stacked_bar(leafcutter_dir: Path, dataset_a: str, datase
 
     print(f"Wrote {sum_table}")
 
+    ordered_summary = {
+        _display_cell_name(ct, dataset_a, dataset_b): summary_by_cell[ct]
+        for ct in display_cell_types
+    }
+    return ordered_summary
+
+
+def write_combined_stacked_bar(
+    summaries_by_pair: Dict[Tuple[str, str], Dict[str, Dict[str, int]]],
+) -> None:
+    """Write one 3-panel stacked bar figure for HH, HM, and MM comparisons.
+
+    Bars are percentages where each cell type's success clusters are 100%.
+    """
+
     if plt is None:
         print(
             "Skipping stacked bar plot: matplotlib is not installed in the active environment. "
@@ -359,37 +448,78 @@ def write_sum_table_and_stacked_bar(leafcutter_dir: Path, dataset_a: str, datase
         )
         return
 
-    # Stacked bar: not-sig (bottom), sig-but-no-dpsi02 (middle), sig+dpsi>=0.2 (top).
-    # Use exact count decomposition:
-    #   bottom = success - sig_p05
-    #   middle = sig_p05 - sig_dpsi_02
-    #   top    = sig_dpsi_02
-    success_vals      = [summary_by_cell[ct]["success"] for ct in display_cell_types]
-    sig_p05_vals      = [summary_by_cell[ct]["sig_p05"] for ct in display_cell_types]
-    sig02_vals_raw    = [summary_by_cell[ct]["sig_dpsi_02"] for ct in display_cell_types]
-    not_sig_vals      = [s - p for s, p in zip(success_vals, sig_p05_vals)]
-    sig_not_dpsi_vals = [p - d for p, d in zip(sig_p05_vals, sig02_vals_raw)]
-    sig02_vals        = sig02_vals_raw
-    bottom2           = [a + b for a, b in zip(not_sig_vals, sig_not_dpsi_vals)]
+    panel_order = [
+        ("GSE115736", "GSE60424"),
+        ("GSE115736", "GSE116177"),
+        ("GSE116177", "GSE180020"),
+    ]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    x = list(range(len(display_cell_types)))
-    ax.bar(x, not_sig_vals,      label="Success but not sig (p>0.05)", color="#deebf7")
-    ax.bar(x, sig_not_dpsi_vals, bottom=not_sig_vals, label="sig (p<0.05) but abs(deltapsi)<0.2", color="#9ecae1")
-    ax.bar(x, sig02_vals,        bottom=bottom2,      label="sig (p<0.05) + abs(deltapsi)>=0.2",  color="#08519c")
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    colors = {
+        "not_sig": "#deebf7",
+        "sig_not_dpsi": "#9ecae1",
+        "sig_dpsi": "#08519c",
+    }
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(display_cell_types, rotation=0)
-    ax.set_ylabel("Number of clusters")
-    ax.set_title(f"{dataset_a} vs {dataset_b}: Leafcutter success and significant clusters")
-    ax.legend(fontsize=8)
+    for panel_idx, (dataset_a, dataset_b) in enumerate(panel_order):
+        ax = axes[panel_idx]
+        pair_key = _normalize_pair(dataset_a, dataset_b)
+        summary_by_cell = summaries_by_pair.get(pair_key, {})
 
-    for i, total in enumerate(success_vals):
-        ax.text(i, total + 0.3, str(int(total)), ha="center", va="bottom", fontsize=8)
+        display_cell_types = list(summary_by_cell.keys())
+        success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
+        sig_p05_vals = [summary_by_cell[ct]["sig_p05"] for ct in display_cell_types]
+        sig02_vals = [summary_by_cell[ct]["sig_dpsi_02"] for ct in display_cell_types]
 
-    plt.tight_layout()
-    plot_png = leafcutter_dir / f"{dataset_a}_{dataset_b}_stacked_success_sig_deltapsi02.png"
-    plot_svg = leafcutter_dir / f"{dataset_a}_{dataset_b}_stacked_success_sig_deltapsi02.svg"
+        not_sig_counts = [s - p for s, p in zip(success_vals, sig_p05_vals)]
+        sig_not_dpsi_counts = [p - d for p, d in zip(sig_p05_vals, sig02_vals)]
+
+        not_sig_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(not_sig_counts, success_vals)]
+        sig_not_dpsi_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig_not_dpsi_counts, success_vals)]
+        sig02_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig02_vals, success_vals)]
+        bottom2 = [a + b for a, b in zip(not_sig_pct, sig_not_dpsi_pct)]
+
+        x = list(range(len(display_cell_types)))
+        ax.bar(x, not_sig_pct, label="Success but not sig (p>0.05)", color=colors["not_sig"])
+        ax.bar(
+            x,
+            sig_not_dpsi_pct,
+            bottom=not_sig_pct,
+            label="sig (p<0.05) but abs(deltapsi)<0.2",
+            color=colors["sig_not_dpsi"],
+        )
+        ax.bar(
+            x,
+            sig02_pct,
+            bottom=bottom2,
+            label="sig (p<0.05) + abs(deltapsi)>=0.2",
+            color=colors["sig_dpsi"],
+        )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(display_cell_types, rotation=25, ha="right")
+        ax.set_ylim(0, 110)
+        ax.set_title(_comparison_title(dataset_a, dataset_b), pad=10)
+
+        for i, total in enumerate(success_vals):
+            ax.text(i, 102, str(int(total)), ha="center", va="bottom", fontsize=8)
+
+    axes[0].set_ylabel("Percent of success clusters (%)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=3,
+        fontsize=9,
+        frameon=False,
+    )
+    fig.suptitle("Leafcutter cluster outcomes by comparison (success = 100%)", y=0.98)
+
+    plt.tight_layout(rect=(0, 0.08, 1, 0.93))
+    plot_png = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi02_HH_HM_MM.png"
+    plot_svg = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi02_HH_HM_MM.svg"
     fig.savefig(plot_png, dpi=200)
     fig.savefig(plot_svg)
     plt.close(fig)
@@ -411,18 +541,13 @@ def merge_leafcutter_results(
     cell_sig: Dict[str, Dict[str, Dict]] = {}   # cell_type -> cluster_id -> row
     cell_eff: Dict[str, Dict[str, Dict]] = {}   # cell_type -> junction_key -> row
 
-    for cell_type_dir in sorted(d for d in leafcutter_dir.iterdir()
-                                if d.is_dir() and d.name != "genes_figs"):
-        sig_file    = cell_type_dir / "leafcutter_ds_cluster_significance.txt"
-        effect_file = cell_type_dir / "leafcutter_ds_effect_sizes.txt"
-        if not sig_file.exists() or not effect_file.exists():
-            continue
-        ct = cell_type_dir.name
+    for ct, sig_file, effect_file in collect_leafcutter_units(leafcutter_dir):
         cell_types.append(ct)
         cell_sig[ct] = load_cluster_significance(sig_file)
         cell_eff[ct] = load_effect_sizes_by_junction(effect_file)
 
-    all_junctions = load_junctions_with_as_averages(VALUE_FILE, dataset_a, dataset_b, cell_types)
+    value_file = _value_file_for_pair(dataset_a, dataset_b)
+    all_junctions = load_junctions_with_as_averages(value_file, dataset_a, dataset_b, cell_types)
 
     # Build output: one row per junction
     output_rows = []
@@ -517,18 +642,30 @@ def merge_leafcutter_results(
 
 def main() -> None:
     metadata      = load_metadata(METADATA_FILE)
+    fibro_dir = SHARED_JUNCTIONS_DIR / "leafcutter_EMTAB5919H_EMTAB5919M"
+    fibro_summary = summarize_leafcutter_celltype(fibro_dir) if fibro_dir.exists() else None
 
     leafcutter_dirs = sorted(d for d in SHARED_JUNCTIONS_DIR.iterdir()
-                             if d.is_dir() and d.name.startswith("leafcutter_GSE"))
+                             if d.is_dir() and d.name.startswith("leafcutter_"))
+
+    summaries_by_pair: Dict[Tuple[str, str], Dict[str, Dict[str, int]]] = {}
 
     for leaf_dir in leafcutter_dirs:
-        match = re.match(r"leafcutter_(GSE\d+)_(GSE\d+)$", leaf_dir.name)
+        match = re.match(r"leafcutter_([^_]+)_([^_]+)$", leaf_dir.name)
         if not match:
             continue
         dataset_a, dataset_b = match.group(1), match.group(2)
         print(f"Processing {leaf_dir.name} ({dataset_a} vs {dataset_b})...")
         merge_leafcutter_results(leaf_dir, dataset_a, dataset_b, metadata)
-        write_sum_table_and_stacked_bar(leaf_dir, dataset_a, dataset_b)
+
+        extra_cells = None
+        if _normalize_pair(dataset_a, dataset_b) == _normalize_pair("GSE115736", "GSE116177") and fibro_summary:
+            extra_cells = {"Fibroblast": fibro_summary}
+
+        summary = write_sum_table_and_stacked_bar(leaf_dir, dataset_a, dataset_b, extra_cells=extra_cells)
+        summaries_by_pair[_normalize_pair(dataset_a, dataset_b)] = summary
+
+    write_combined_stacked_bar(summaries_by_pair)
 
 
 if __name__ == "__main__":
