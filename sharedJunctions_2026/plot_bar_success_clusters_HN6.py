@@ -149,7 +149,7 @@ def plot_cluster_bars(
     ax1.set_ylabel("PSI")
 
     ax2.set_xticks(r)
-    ax2.set_xticklabels(labels, fontsize=8, rotation=45, ha="right")
+    ax2.set_xticklabels(labels, fontsize=8, rotation=0, ha="center")
     ax2.tick_params(axis="x", which="both", length=0)
     ax2.set_ylabel("Counts")
 
@@ -256,13 +256,21 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
                 sig_row = sig_df.loc[sig_df["cluster"] == cluster]
                 gene_name = ""
                 p_adjust = "NA"
+                deltapsi = "NA"
                 if not sig_row.empty:
                     row = sig_row.iloc[0]
                     gene_name = str(row.get("genes", ""))
                     p_raw = row.get("p.adjust", np.nan)
                     p_adjust = f"{float(p_raw):.3g}" if pd.notna(p_raw) else "NA"
+                    if "deltapsi" in row and pd.notna(row.get("deltapsi", np.nan)):
+                        deltapsi = f"{float(row.get('deltapsi')):.3g}"
+                    elif "abs_deltapsi" in row and pd.notna(row.get("abs_deltapsi", np.nan)):
+                        deltapsi = f"{float(row.get('abs_deltapsi')):.3g}"
 
-                title = f"{cell_name}_{gene_name}_{cluster}_p={p_adjust}" if gene_name else f"{cell_name}_{cluster}_p={p_adjust}"
+                if gene_name:
+                    title = f"{cell_name}_{gene_name}_{cluster}_p={p_adjust}_deltapsi={deltapsi}"
+                else:
+                    title = f"{cell_name}_{cluster}_p={p_adjust}_deltapsi={deltapsi}"
                 legend_color_map = plot_cluster_bars(psi_cluster, val_cluster, title, out_dir, legend_color_map)
                 plotted += 1
 

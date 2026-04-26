@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find junctions present in all files with >=10 reads in at least 2 samples each."""
+"""Find junctions present in all files with >=10 reads in >=2 samples in >=2 datasets."""
 
 import csv
 import sys
@@ -160,18 +160,17 @@ def find_shared_junctions(input_dir, min_reads=10, min_samples=2, output_file=No
     
     print(f"\nJunctions in all {len(file_names)} files: {len(shared_junction_keys)}", file=sys.stderr)
     
-    # Filter by coverage criterion: >= min_reads in >= min_samples in at least one file
+    # Filter by coverage criterion: >= min_reads in >= min_samples in at least two files
     filtered_shared = {}
     for junction_key in shared_junction_keys:
-        # Check if this junction passes the coverage threshold in any file
-        passes = False
+        # Count how many datasets pass the per-dataset coverage threshold.
+        passing_dataset_count = 0
         for fname in file_names:
             read_counts = all_junctions[fname][junction_key]
             if has_min_coverage(read_counts, min_reads, min_samples):
-                passes = True
-                break
+                passing_dataset_count += 1
         
-        if passes:
+        if passing_dataset_count >= 2:
             reference_junction_id = all_original_labels[reference_file].get(junction_key, junction_key)
             # Store the junction with all its data from all files
             filtered_shared[reference_junction_id] = {
@@ -179,7 +178,9 @@ def find_shared_junctions(input_dir, min_reads=10, min_samples=2, output_file=No
                 for fname in file_names
             }
     
-    print(f"Shared junctions with >={min_reads} reads in >={min_samples} samples: {len(filtered_shared)}", 
+    print(
+        f"Shared junctions with >={min_reads} reads in >={min_samples} samples in >=2 datasets: "
+        f"{len(filtered_shared)}",
           file=sys.stderr)
     
     # Write output

@@ -291,6 +291,8 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
             "sig_dpsi_02": 0,
             "sig_dpsi_01": 0,
             "sig_dpsi_005": 0,
+            "unchanged_dpsi_lt_005": 0,
+            "not_informative": 0,
         }
 
     success_clusters = set()
@@ -333,6 +335,8 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
     sig_dpsi_02 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.2)
     sig_dpsi_01 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.1)
     sig_dpsi_005 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.05)
+    unchanged_dpsi_lt_005 = sum(1 for c in success_clusters if cluster_max_abs_dpsi.get(c, 0.0) < 0.05)
+    not_informative = max(0, len(success_clusters) - sig_dpsi_01 - unchanged_dpsi_lt_005)
 
     return {
         "success": len(success_clusters),
@@ -340,6 +344,8 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
         "sig_dpsi_02": sig_dpsi_02,
         "sig_dpsi_01": sig_dpsi_01,
         "sig_dpsi_005": sig_dpsi_005,
+        "unchanged_dpsi_lt_005": unchanged_dpsi_lt_005,
+        "not_informative": not_informative,
     }
 
 
@@ -404,7 +410,7 @@ def write_sum_table_and_stacked_bar(
     ]
     display_labels = [_display_cell_name(ct, dataset_a, dataset_b) for ct in display_cell_types]
 
-    # Write table matching the "last 5 rows" format
+    # Write table with requested summary rows.
     sum_table = leafcutter_dir / "sum_table_HN6.txt"
     with sum_table.open("w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
@@ -412,10 +418,9 @@ def write_sum_table_and_stacked_bar(
 
         rows = [
             ("Leafcutter success clusters", "success"),
-            ("Leafcutter sig clusters (p<0.05)", "sig_p05"),
-            ("Leafcutter sig and deltapsi>=0.2", "sig_dpsi_02"),
-            ("Leafcutter sig and deltapsi>=0.1", "sig_dpsi_01"),
-            ("Leafcutter sig and deltapsi>=0.05", "sig_dpsi_005"),
+            ("Leafcutter sig clusters (p<0.05, deltapsi>0.1)", "sig_dpsi_01"),
+            ("Unchanged (deltapsi<0.05)", "unchanged_dpsi_lt_005"),
+            ("Not informative", "not_informative"),
         ]
 
         for label, key in rows:
@@ -456,9 +461,9 @@ def write_combined_stacked_bar(
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     colors = {
-        "not_sig": "#deebf7",
-        "sig_not_dpsi": "#9ecae1",
-        "sig_dpsi": "#08519c",
+        "not_informative": "#deebf7",
+        "unchanged": "#9ecae1",
+        "sig_dpsi_01": "#08519c",
     }
 
     for panel_idx, (dataset_a, dataset_b) in enumerate(panel_order):
@@ -468,32 +473,39 @@ def write_combined_stacked_bar(
 
         display_cell_types = list(summary_by_cell.keys())
         success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
-        sig_p05_vals = [summary_by_cell[ct]["sig_p05"] for ct in display_cell_types]
-        sig02_vals = [summary_by_cell[ct]["sig_dpsi_02"] for ct in display_cell_types]
+        sig_dpsi_01_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
+        unchanged_vals = [summary_by_cell[ct]["unchanged_dpsi_lt_005"] for ct in display_cell_types]
+        not_informative_vals = [summary_by_cell[ct]["not_informative"] for ct in display_cell_types]
 
-        not_sig_counts = [s - p for s, p in zip(success_vals, sig_p05_vals)]
-        sig_not_dpsi_counts = [p - d for p, d in zip(sig_p05_vals, sig02_vals)]
-
-        not_sig_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(not_sig_counts, success_vals)]
-        sig_not_dpsi_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig_not_dpsi_counts, success_vals)]
-        sig02_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig02_vals, success_vals)]
-        bottom2 = [a + b for a, b in zip(not_sig_pct, sig_not_dpsi_pct)]
+        not_informative_pct = [
+            ((v / s) * 100.0) if s > 0 else 0.0
+            for v, s in zip(not_informative_vals, success_vals)
+        ]
+        unchanged_pct = [
+            ((v / s) * 100.0) if s > 0 else 0.0
+            for v, s in zip(unchanged_vals, success_vals)
+        ]
+        sig_dpsi_01_pct = [
+            ((v / s) * 100.0) if s > 0 else 0.0
+            for v, s in zip(sig_dpsi_01_vals, success_vals)
+        ]
+        bottom2 = [a + b for a, b in zip(not_informative_pct, unchanged_pct)]
 
         x = list(range(len(display_cell_types)))
-        ax.bar(x, not_sig_pct, label="Success but not sig (p>0.05)", color=colors["not_sig"])
+        ax.bar(x, not_informative_pct, label="Not informative", color=colors["not_informative"])
         ax.bar(
             x,
-            sig_not_dpsi_pct,
-            bottom=not_sig_pct,
-            label="sig (p<0.05) but abs(deltapsi)<0.2",
-            color=colors["sig_not_dpsi"],
+            unchanged_pct,
+            bottom=not_informative_pct,
+            label="Unchanged (deltapsi<0.05)",
+            color=colors["unchanged"],
         )
         ax.bar(
             x,
-            sig02_pct,
+            sig_dpsi_01_pct,
             bottom=bottom2,
-            label="sig (p<0.05) + abs(deltapsi)>=0.2",
-            color=colors["sig_dpsi"],
+            label="Leafcutter sig clusters (p<0.05, deltapsi>0.1)",
+            color=colors["sig_dpsi_01"],
         )
 
         ax.set_xticks(x)
@@ -518,8 +530,8 @@ def write_combined_stacked_bar(
     fig.suptitle("Leafcutter cluster outcomes by comparison (success = 100%)", y=0.98)
 
     plt.tight_layout(rect=(0, 0.08, 1, 0.93))
-    plot_png = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi02_HH_HM_MM.png"
-    plot_svg = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi02_HH_HM_MM.svg"
+    plot_png = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi01_HH_HM_MM.png"
+    plot_svg = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi01_HH_HM_MM.svg"
     fig.savefig(plot_png, dpi=200)
     fig.savefig(plot_svg)
     plt.close(fig)

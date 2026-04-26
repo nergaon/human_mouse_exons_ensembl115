@@ -3,13 +3,13 @@
 For each cell type (CD4T, CD8T, NveB, NK, Mono), collect rows from
 leafcutter_GSE115736_GSE116177/clusters_sum_table_HN6.txt that satisfy:
 
-  Condition 1 (unique-sig):
-      sig   in GSE115736_GSE116177  (p.adjust <= 0.05)
-        AND not-sig in GSE115736_GSE60424   (p.adjust >  0.05)
-        AND not-sig in GSE116177_GSE180020  (p.adjust >  0.05)
+    Condition 1 (unique-sig):
+            sig   in GSE115736_GSE116177  (p.adjust < 0.05 and abs_deltapsi > 0.1)
+                AND unchanged in GSE115736_GSE60424  (abs_deltapsi < 0.05)
+                AND unchanged in GSE116177_GSE180020 (abs_deltapsi < 0.05)
 
-  Condition 2 (not-sig everywhere):
-      not-sig in all three comparisons
+  Condition 2 (unchanged everywhere):
+      unchanged in all three comparisons (abs_deltapsi < 0.05)
 
 Cell-type name aliases across files:
     canonical  file-A   file-B   file-C
@@ -22,8 +22,8 @@ Cell-type name aliases across files:
 Output: Excel file with
     - One sheet per cell type containing matching rows with only that cell type's
         columns from file A/B/C (plus identifiers).
-  - One "summary" sheet: one row per unique cluster found in ANY cell-type sheet;
-    columns = cell types; values = "sig" / "not sig" based on file A.
+    - One "summary" sheet: one row per unique cluster found in ANY cell-type sheet;
+        columns = cell types; values = "sig" / "unchanged" based on file A.
 """
 
 from pathlib import Path
@@ -47,6 +47,8 @@ PLOT_HEATMAP = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN
 PLOT_SHARED = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_shared_sig_counts.png"
 
 THRESHOLD = 0.05
+SIG_DELTAPSI_THRESHOLD = 0.1
+UNCHANGED_DELTAPSI_THRESHOLD = 0.05
 
 # canonical CT name -> (prefix_in_A, prefix_in_B, prefix_in_C)
 CELL_TYPES: dict[str, tuple[str, str, str]] = {
@@ -64,6 +66,9 @@ CELL_TYPES: dict[str, tuple[str, str, str]] = {
 def padj_col(prefix: str) -> str:
     return f"{prefix}_p.adjust"
 
+def abs_deltapsi_col(prefix: str) -> str:
+    return f"{prefix}_abs_deltapsi"
+
 def cluster_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
     """Return per-cluster p.adjust (index = cluster id, float)."""
     col = padj_col(prefix)
@@ -71,6 +76,15 @@ def cluster_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
         return pd.Series(dtype=float)
     first_per_cluster = df.drop_duplicates(subset="cluster").set_index("cluster")[col]
     return first_per_cluster.astype(float)
+
+
+def cluster_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
+    """Return per-cluster abs_deltapsi (index = cluster id, float)."""
+    col = abs_deltapsi_col(prefix)
+    if col not in df.columns:
+        return pd.Series(dtype=float)
+    first_per_cluster = df.drop_duplicates(subset="cluster").set_index("cluster")[col]
+    return first_per_cluster.astype(float).abs()
 
 
 def cell_type_cols(df: pd.DataFrame, prefix: str) -> list[str]:
@@ -97,17 +111,17 @@ def first_gene_label(genes_text: str) -> str:
     return re.split(r"[;,|]", txt, maxsplit=1)[0].strip()
 
 def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Path) -> None:
-    """Plot stacked cluster counts: unique-sig vs not-sig-all for each cell type."""
+    """Plot stacked cluster counts: unique-sig vs unchanged-all for each cell type."""
     ct_order = list(CELL_TYPES.keys())
     unique_vals = [counts_by_ct.get(ct, {}).get("unique_sig", 0) for ct in ct_order]
-    not_sig_vals = [counts_by_ct.get(ct, {}).get("not_sig_all", 0) for ct in ct_order]
-    totals = [u + n for u, n in zip(unique_vals, not_sig_vals)]
+    unchanged_vals = [counts_by_ct.get(ct, {}).get("unchanged_all", 0) for ct in ct_order]
+    totals = [u + n for u, n in zip(unique_vals, unchanged_vals)]
 
     x = np.arange(len(ct_order))
     plt.close("all")
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
     ax.bar(x, unique_vals, color="#1f77b4", label="unique-sig")
-    ax.bar(x, not_sig_vals, bottom=unique_vals, color="#bdbdbd", label="not-sig-all")
+    ax.bar(x, unchanged_vals, bottom=unique_vals, color="#bdbdbd", label="unchanged-all")
 
     for i, total in enumerate(totals):
         ax.text(i, total + max(5, int(0.01 * max(totals, default=1))), str(total),
@@ -123,7 +137,7 @@ def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Pa
     plt.close("all")
 
 def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
-    """Plot cluster x cell-type heatmap: sig=blue, not sig=light yellow, blank=light grey."""
+    """Plot cluster x cell-type heatmap: sig=blue, unchanged=light yellow, blank=light grey."""
     ct_order = list(CELL_TYPES.keys())
     if summary_df.empty:
         return
@@ -131,7 +145,7 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     heat_df = summary_df.copy()
     heat_df["genes"] = heat_df.get("genes", "").fillna("").astype(str)
     for ct in ct_order:
-        heat_df[ct] = heat_df[ct].replace("", float("nan")).map({"sig": 1.0, "not sig": 0.0})
+        heat_df[ct] = heat_df[ct].replace("", float("nan")).map({"sig": 1.0, "unchanged": 0.0})
     heat_df["sig_count"] = heat_df[ct_order].sum(axis=1, skipna=True)
     heat_df = heat_df.sort_values(["sig_count", "cluster"], ascending=[False, True]).reset_index(drop=True)
 
@@ -139,11 +153,11 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     n_rows = len(heat_df)
     n_cols = len(ct_order)
 
-    # map: NaN -> 2 (blank), 0 -> 0 (not sig), 1 -> 1 (sig)
+    # map: NaN -> 2 (blank), 0 -> 0 (unchanged), 1 -> 1 (sig)
     mat_raw = heat_df[ct_order].to_numpy(dtype=float)
     mat_coded = np.where(np.isnan(mat_raw), 2.0, mat_raw)
 
-    # custom 3-color map: not sig=#ffffcc, sig=#2171b5, blank=#d9d9d9
+    # custom 3-color map: unchanged=#ffffcc, sig=#2171b5, blank=#d9d9d9
     from matplotlib.colors import ListedColormap, BoundaryNorm
     cmap3 = ListedColormap(["#ffffcc", "#2171b5", "#d9d9d9"])
     norm3 = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap3.N)
@@ -167,13 +181,13 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     from matplotlib.patches import Patch
     legend_handles = [
         Patch(facecolor="#2171b5", label="sig"),
-        Patch(facecolor="#ffffcc", label="not sig"),
+        Patch(facecolor="#ffffcc", label="unchanged"),
         Patch(facecolor="#d9d9d9", label="not tested / excluded"),
     ]
     ax.legend(handles=legend_handles, loc="upper right",
               bbox_to_anchor=(1.0, -0.02), frameon=False, fontsize=8)
 
-    ax.set_title("Summary status in A (sig vs not sig)", pad=30)
+    ax.set_title("Summary status in A (sig vs unchanged)", pad=30)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close("all")
@@ -217,12 +231,16 @@ def main() -> None:
     print(f"  File B: {len(df_b):,} rows")
     print(f"  File C: {len(df_c):,} rows")
 
-    # Pre-build per-cluster p.adjust lookups from B and C
+    # Pre-build per-cluster p.adjust and abs_deltapsi lookups from B and C
     padj_b: dict[str, pd.Series] = {}
     padj_c: dict[str, pd.Series] = {}
+    dpsi_b: dict[str, pd.Series] = {}
+    dpsi_c: dict[str, pd.Series] = {}
     for ct, (pfx_a, pfx_b, pfx_c) in CELL_TYPES.items():
         padj_b[ct] = cluster_padj_lookup(df_b, pfx_b)
         padj_c[ct] = cluster_padj_lookup(df_c, pfx_c)
+        dpsi_b[ct] = cluster_abs_deltapsi_lookup(df_b, pfx_b)
+        dpsi_c[ct] = cluster_abs_deltapsi_lookup(df_c, pfx_c)
 
     # Ordered list of clusters seen across all cell-type sheets (deduplicated)
     seen_clusters: dict[str, None] = {}  # ordered set via dict
@@ -239,25 +257,31 @@ def main() -> None:
         # ------------------------------------------------------------------ #
         for ct, (pfx_a, pfx_b, pfx_c) in CELL_TYPES.items():
             col_a = padj_col(pfx_a)
-            if col_a not in df_a.columns:
-                print(f"  [{ct}] column '{col_a}' not found in file A — skipping")
+            dpsi_col_a = abs_deltapsi_col(pfx_a)
+            if col_a not in df_a.columns or dpsi_col_a not in df_a.columns:
+                print(
+                    f"  [{ct}] columns '{col_a}' and/or '{dpsi_col_a}' not found in file A — skipping"
+                )
                 continue
 
             pa = df_a[col_a].astype(float)
+            da = df_a[dpsi_col_a].astype(float).abs()
             pb = df_a["cluster"].map(padj_b[ct])
             pc = df_a["cluster"].map(padj_c[ct])
+            db = df_a["cluster"].map(dpsi_b[ct])
+            dc = df_a["cluster"].map(dpsi_c[ct])
 
             # Exclude any cluster absent in B or C for this cell type.
-            valid_in_all = pb.notna() & pc.notna()
+            valid_in_all = pb.notna() & pc.notna() & db.notna() & dc.notna()
 
-            sig_a     = pa <= THRESHOLD
-            not_sig_a = pa  > THRESHOLD
-            not_sig_b = pb > THRESHOLD
-            not_sig_c = pc > THRESHOLD
+            sig_a = (pa < THRESHOLD) & (da > SIG_DELTAPSI_THRESHOLD)
+            unchanged_a = da < UNCHANGED_DELTAPSI_THRESHOLD
+            unchanged_b = db < UNCHANGED_DELTAPSI_THRESHOLD
+            unchanged_c = dc < UNCHANGED_DELTAPSI_THRESHOLD
 
-            unique_sig_mask = valid_in_all & sig_a & not_sig_b & not_sig_c
-            not_sig_all_mask = valid_in_all & not_sig_a & not_sig_b & not_sig_c
-            mask = unique_sig_mask | not_sig_all_mask
+            unique_sig_mask = valid_in_all & sig_a & unchanged_b & unchanged_c
+            unchanged_all_mask = valid_in_all & unchanged_a & unchanged_b & unchanged_c
+            mask = unique_sig_mask | unchanged_all_mask
 
             # Keep only this cell type columns from each source file.
             keys = [
@@ -301,16 +325,16 @@ def main() -> None:
             result.to_excel(writer, sheet_name=ct, index=False)
 
             unique_sig_clusters = set(df_a.loc[unique_sig_mask, "cluster"].astype(str))
-            not_sig_all_clusters = set(df_a.loc[not_sig_all_mask, "cluster"].astype(str))
+            unchanged_all_clusters = set(df_a.loc[unchanged_all_mask, "cluster"].astype(str))
 
             n_unique_sig = len(unique_sig_clusters)
-            n_not_sig_all = len(not_sig_all_clusters)
+            n_unchanged_all = len(unchanged_all_clusters)
             counts_by_ct[ct] = {
                 "unique_sig": n_unique_sig,
-                "not_sig_all": n_not_sig_all,
+                "unchanged_all": n_unchanged_all,
             }
             print(f"  [{ct}] {len(result):,} rows written  "
-                  f"(unique-sig: {n_unique_sig}, not-sig-all: {n_not_sig_all})")
+                  f"(unique-sig: {n_unique_sig}, unchanged-all: {n_unchanged_all})")
 
             for cl in result["cluster"].unique():
                 seen_clusters[cl] = None
@@ -326,15 +350,19 @@ def main() -> None:
             .set_index("cluster")["genes"]
         )
 
-        # Build a cluster -> {ct: sig status in A} table
-        # Use first occurrence of each cluster in file A for p.adjust lookup
+        # Build a cluster -> {ct: sig/unchanged status in A} table
+        # Use first occurrence of each cluster in file A for p.adjust/abs_deltapsi lookup
         cluster_padj_a: dict[str, dict[str, float]] = {}
+        cluster_dpsi_a: dict[str, dict[str, float]] = {}
         for ct, (pfx_a, _, _) in CELL_TYPES.items():
             col_a = padj_col(pfx_a)
-            if col_a not in df_a.columns:
+            dpsi_col_a = abs_deltapsi_col(pfx_a)
+            if col_a not in df_a.columns or dpsi_col_a not in df_a.columns:
                 continue
             for cl, val in cluster_padj_lookup(df_a, pfx_a).items():
                 cluster_padj_a.setdefault(cl, {})[ct] = val
+            for cl, val in cluster_abs_deltapsi_lookup(df_a, pfx_a).items():
+                cluster_dpsi_a.setdefault(cl, {})[ct] = val
 
         rows = []
         for cl in seen_clusters:
@@ -344,10 +372,16 @@ def main() -> None:
                     row[ct] = ""  # did not qualify for this cell type
                 else:
                     padj_val = cluster_padj_a.get(cl, {}).get(ct)
-                    if padj_val is None:
+                    dpsi_val = cluster_dpsi_a.get(cl, {}).get(ct)
+                    if padj_val is None or dpsi_val is None:
                         row[ct] = ""
                     else:
-                        row[ct] = "sig" if padj_val <= THRESHOLD else "not sig"
+                        if (padj_val < THRESHOLD) and (dpsi_val > SIG_DELTAPSI_THRESHOLD):
+                            row[ct] = "sig"
+                        elif dpsi_val < UNCHANGED_DELTAPSI_THRESHOLD:
+                            row[ct] = "unchanged"
+                        else:
+                            row[ct] = ""
             rows.append(row)
 
         summary_df = pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
