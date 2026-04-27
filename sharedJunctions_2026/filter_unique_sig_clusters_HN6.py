@@ -4,12 +4,12 @@ For each cell type (CD4T, CD8T, NveB, NK, Mono), collect rows from
 leafcutter_GSE115736_GSE116177/clusters_sum_table_HN6.txt that satisfy:
 
     Condition 1 (unique-sig):
-            sig   in GSE115736_GSE116177  (p.adjust < 0.05 and abs_deltapsi > 0.1)
-                AND unchanged in GSE115736_GSE60424  (abs_deltapsi < 0.05)
-                AND unchanged in GSE116177_GSE180020 (abs_deltapsi < 0.05)
+            sig   in GSE115736_GSE116177  (p.adjust <= 0.05 and abs_deltapsi >= 0.1)
+                AND unchanged in GSE115736_GSE60424  (abs_deltapsi < 0.05 or p.adjust > 0.05)
+                AND unchanged in GSE116177_GSE180020 (abs_deltapsi < 0.05 or p.adjust > 0.05)
 
   Condition 2 (unchanged everywhere):
-      unchanged in all three comparisons (abs_deltapsi < 0.05)
+      unchanged in all three comparisons (abs_deltapsi < 0.05 or p.adjust > 0.05)
 
 Cell-type name aliases across files:
     canonical  file-A   file-B   file-C
@@ -45,6 +45,14 @@ OUTPUT = BASE / "leafcutter_GSE115736_GSE116177"  / "unique_sig_clusters_HN6.xls
 PLOT_STACKED = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_counts_stacked.png"
 PLOT_HEATMAP = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_summary_heatmap.png"
 PLOT_SHARED = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_shared_sig_counts.png"
+PLOT_UPSET_SIG_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_upset_sig.png"
+PLOT_UPSET_SIG_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_upset_sig.svg"
+PLOT_UPSET_UNCHANGED_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_upset_unchanged.png"
+PLOT_UPSET_UNCHANGED_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_upset_unchanged.svg"
+PLOT_A_ONLY_UPSET_SIG_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_sig.png"
+PLOT_A_ONLY_UPSET_SIG_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_sig.svg"
+PLOT_A_ONLY_UPSET_UNCHANGED_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_unchanged.png"
+PLOT_A_ONLY_UPSET_UNCHANGED_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_unchanged.svg"
 
 THRESHOLD = 0.05
 SIG_DELTAPSI_THRESHOLD = 0.1
@@ -69,22 +77,31 @@ def padj_col(prefix: str) -> str:
 def abs_deltapsi_col(prefix: str) -> str:
     return f"{prefix}_abs_deltapsi"
 
-def cluster_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
-    """Return per-cluster p.adjust (index = cluster id, float)."""
+def cluster_min_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
+    """Return per-cluster minimum p.adjust (index = cluster id, float)."""
     col = padj_col(prefix)
     if col not in df.columns:
         return pd.Series(dtype=float)
-    first_per_cluster = df.drop_duplicates(subset="cluster").set_index("cluster")[col]
-    return first_per_cluster.astype(float)
+    return df.groupby("cluster", dropna=False)[col].min().astype(float)
 
 
-def cluster_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
-    """Return per-cluster abs_deltapsi (index = cluster id, float)."""
+def cluster_max_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
+    """Return per-cluster maximum absolute deltapsi (index = cluster id, float)."""
     col = abs_deltapsi_col(prefix)
     if col not in df.columns:
         return pd.Series(dtype=float)
-    first_per_cluster = df.drop_duplicates(subset="cluster").set_index("cluster")[col]
-    return first_per_cluster.astype(float).abs()
+    return df[col].astype(float).abs().groupby(df["cluster"], dropna=False).max().astype(float)
+
+
+def classify_cluster_status(min_padj: float | None, max_abs_dpsi: float | None) -> str:
+    """Classify one cluster using one p.adjust and one max abs_deltapsi value."""
+    if min_padj is None or max_abs_dpsi is None:
+        return ""
+    if (min_padj <= THRESHOLD) and (max_abs_dpsi >= SIG_DELTAPSI_THRESHOLD):
+        return "sig"
+    if (max_abs_dpsi < UNCHANGED_DELTAPSI_THRESHOLD) or (min_padj > THRESHOLD):
+        return "unchanged"
+    return ""
 
 
 def cell_type_cols(df: pd.DataFrame, prefix: str) -> list[str]:
@@ -111,27 +128,55 @@ def first_gene_label(genes_text: str) -> str:
     return re.split(r"[;,|]", txt, maxsplit=1)[0].strip()
 
 def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Path) -> None:
-    """Plot stacked cluster counts: unique-sig vs unchanged-all for each cell type."""
+    """Plot stacked cluster counts: 5 categories per cell type.
+
+    Categories (stacked bottom to top):
+      1. unique-sig         : sig in A, unchanged in B and C  (solid blue)
+      2. sig-not-unique     : sig in A, controls NOT all unchanged (hatched blue)
+      3. unchanged-all      : unchanged in all three (solid grey)
+      4. unchanged-not-all  : unchanged in A, controls NOT all unchanged (hatched grey)
+      5. not-informative    : neither sig nor unchanged in A (light beige)
+    """
     ct_order = list(CELL_TYPES.keys())
-    unique_vals = [counts_by_ct.get(ct, {}).get("unique_sig", 0) for ct in ct_order]
-    unchanged_vals = [counts_by_ct.get(ct, {}).get("unchanged_all", 0) for ct in ct_order]
-    totals = [u + n for u, n in zip(unique_vals, unchanged_vals)]
+    v_usig  = np.array([counts_by_ct.get(ct, {}).get("unique_sig",        0) for ct in ct_order], dtype=float)
+    v_snu   = np.array([counts_by_ct.get(ct, {}).get("sig_not_unique",    0) for ct in ct_order], dtype=float)
+    v_uall  = np.array([counts_by_ct.get(ct, {}).get("unchanged_all",     0) for ct in ct_order], dtype=float)
+    v_unall = np.array([counts_by_ct.get(ct, {}).get("unchanged_not_all", 0) for ct in ct_order], dtype=float)
+    v_noinfo= np.array([counts_by_ct.get(ct, {}).get("not_informative",   0) for ct in ct_order], dtype=float)
+    totals  = (v_usig + v_snu + v_uall + v_unall + v_noinfo).astype(int)
+
+    b2 = v_usig
+    b3 = b2 + v_snu
+    b4 = b3 + v_uall
+    b5 = b4 + v_unall
+
+    sig_color  = "#1f77b4"
+    unch_color = "#bdbdbd"
+    noinfo_color = "#f5f0e8"
 
     x = np.arange(len(ct_order))
     plt.close("all")
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    ax.bar(x, unique_vals, color="#1f77b4", label="unique-sig")
-    ax.bar(x, unchanged_vals, bottom=unique_vals, color="#bdbdbd", label="unchanged-all")
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
+    ax.bar(x, v_usig,   color=sig_color,   label="unique-sig (sig in H-M, unchanged in H-H & M-M)")
+    ax.bar(x, v_snu,    bottom=b2, color=sig_color,   hatch="///", edgecolor="white",
+           label="sig in H-M (controls not all unchanged)")
+    ax.bar(x, v_uall,   bottom=b3, color=unch_color,  label="unchanged-all (unchanged in all three)")
+    ax.bar(x, v_unall,  bottom=b4, color=unch_color,  hatch="///", edgecolor="white",
+           label="unchanged in H-M (controls not all unchanged)")
+    ax.bar(x, v_noinfo, bottom=b5, color=noinfo_color, edgecolor="#aaaaaa",
+           label="not informative")
+
+    ymax = int(max(totals, default=0))
+    pad  = max(5, int(0.015 * ymax))
     for i, total in enumerate(totals):
-        ax.text(i, total + max(5, int(0.01 * max(totals, default=1))), str(total),
-                ha="center", va="bottom", fontsize=8)
+        ax.text(i, total + pad, str(total), ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x)
     ax.set_xticklabels(ct_order)
     ax.set_ylabel("Clusters")
-    ax.set_title("Selected clusters per cell type")
-    ax.legend(frameon=False)
+    ax.set_title("Cluster counts per cell type (informative clusters in A)")
+    ax.legend(frameon=False, fontsize=7, loc="upper right")
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close("all")
@@ -218,6 +263,122 @@ def plot_shared_sig_counts(summary_df: pd.DataFrame, output_path: Path) -> None:
     plt.close("all")
 
 
+def _exclusive_intersections_from_summary(
+    summary_df: pd.DataFrame,
+    status: str,
+    ct_order: list[str],
+) -> dict[frozenset[str], int]:
+    """Build exclusive membership counts for one summary status (sig or unchanged)."""
+    intersections: dict[frozenset[str], int] = {}
+    if summary_df.empty:
+        return intersections
+
+    for _, row in summary_df.iterrows():
+        members = frozenset(ct for ct in ct_order if str(row.get(ct, "")) == status)
+        if members:
+            intersections[members] = intersections.get(members, 0) + 1
+    return intersections
+
+
+def plot_summary_upset(
+    summary_df: pd.DataFrame,
+    status: str,
+    title: str,
+    output_png: Path,
+    output_svg: Path,
+    max_combinations: int = 40,
+) -> None:
+    """Plot UpSet-style bar + membership matrix using summary-sheet clusters only."""
+    ct_order = list(CELL_TYPES.keys())
+    intersections = _exclusive_intersections_from_summary(summary_df, status, ct_order)
+    if not intersections:
+        print(f"  no '{status}' combinations to plot")
+        return
+
+    ordered = sorted(
+        intersections.items(),
+        key=lambda item: (-item[1], -len(item[0]), tuple(sorted(item[0]))),
+    )[:max_combinations]
+
+    combinations = [combo for combo, _ in ordered]
+    counts = [count for _, count in ordered]
+
+    width = max(10, min(22, len(combinations) * 0.45 + 5.0))
+    height = max(5.0, min(12.0, len(ct_order) * 0.6 + 3.5))
+
+    plt.close("all")
+    fig = plt.figure(figsize=(width, height))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.04)
+    ax_bar = fig.add_subplot(gs[0])
+    ax_matrix = fig.add_subplot(gs[1], sharex=ax_bar)
+
+    x = list(range(len(combinations)))
+    ax_bar.bar(x, counts, color="#2b8cbe")
+    ax_bar.set_ylabel("Clusters")
+    ax_bar.set_title(title, pad=10)
+    ax_bar.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
+    ax_bar.tick_params(axis="x", labelbottom=False)
+
+    pad = max(1, int(0.01 * max(counts, default=1)))
+    for idx, value in enumerate(counts):
+        ax_bar.text(idx, value + pad, str(value), ha="center", va="bottom", fontsize=7)
+
+    y_map = {cell_type: y for y, cell_type in enumerate(reversed(ct_order))}
+
+    for idx, combo in enumerate(combinations):
+        ys = sorted(y_map[cell] for cell in combo)
+        for y in y_map.values():
+            ax_matrix.plot(idx, y, "o", color="#d9d9d9", markersize=5)
+        for y in ys:
+            ax_matrix.plot(idx, y, "o", color="#08519c", markersize=6)
+        if len(ys) >= 2:
+            ax_matrix.plot([idx, idx], [ys[0], ys[-1]], color="#08519c", linewidth=1.5)
+
+    ax_matrix.set_yticks([y_map[ct] for ct in reversed(ct_order)])
+    ax_matrix.set_yticklabels(list(reversed(ct_order)))
+    ax_matrix.set_ylim(-0.7, len(ct_order) - 0.3)
+    ax_matrix.set_xlabel("Shared-cluster combinations (sorted by size)")
+    ax_matrix.grid(axis="x", linestyle=":", linewidth=0.4, alpha=0.4)
+
+    fig.tight_layout()
+    fig.savefig(output_png, dpi=220)
+    fig.savefig(output_svg)
+    plt.close("all")
+
+
+def build_a_only_summary(df_a: pd.DataFrame) -> pd.DataFrame:
+    """Build cluster x cell-type status table using only GSE115736_GSE116177 results."""
+    cluster_genes = (
+        df_a.drop_duplicates(subset="cluster")[["cluster", "genes"]]
+        .set_index("cluster")["genes"]
+    )
+
+    cluster_status_a: dict[str, dict[str, str]] = {}
+    for ct, (pfx_a, _, _) in CELL_TYPES.items():
+        min_padj = cluster_min_padj_lookup(df_a, pfx_a)
+        max_dpsi = cluster_max_abs_deltapsi_lookup(df_a, pfx_a)
+        for cl in set(min_padj.index).union(max_dpsi.index):
+            status = classify_cluster_status(min_padj.get(cl), max_dpsi.get(cl))
+            if status:
+                cluster_status_a.setdefault(str(cl), {})[ct] = status
+
+    rows = []
+    for cl in df_a["cluster"].drop_duplicates().astype(str):
+        row: dict[str, str] = {"cluster": cl, "genes": str(cluster_genes.get(cl, ""))}
+        has_any_status = False
+        for ct in CELL_TYPES:
+            row[ct] = cluster_status_a.get(cl, {}).get(ct, "")
+            has_any_status = has_any_status or bool(row[ct])
+        if has_any_status:
+            rows.append(row)
+
+    a_only_df = pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
+    if not a_only_df.empty:
+        ct_cols = list(CELL_TYPES.keys())
+        a_only_df["n_sig"] = (a_only_df[ct_cols] == "sig").sum(axis=1)
+    return a_only_df
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -231,22 +392,26 @@ def main() -> None:
     print(f"  File B: {len(df_b):,} rows")
     print(f"  File C: {len(df_c):,} rows")
 
-    # Pre-build per-cluster p.adjust and abs_deltapsi lookups from B and C
-    padj_b: dict[str, pd.Series] = {}
-    padj_c: dict[str, pd.Series] = {}
-    dpsi_b: dict[str, pd.Series] = {}
-    dpsi_c: dict[str, pd.Series] = {}
+    # Pre-build cluster-level metrics for each comparison.
+    min_padj_a: dict[str, pd.Series] = {}
+    max_dpsi_a: dict[str, pd.Series] = {}
+    min_padj_b: dict[str, pd.Series] = {}
+    max_dpsi_b: dict[str, pd.Series] = {}
+    min_padj_c: dict[str, pd.Series] = {}
+    max_dpsi_c: dict[str, pd.Series] = {}
     for ct, (pfx_a, pfx_b, pfx_c) in CELL_TYPES.items():
-        padj_b[ct] = cluster_padj_lookup(df_b, pfx_b)
-        padj_c[ct] = cluster_padj_lookup(df_c, pfx_c)
-        dpsi_b[ct] = cluster_abs_deltapsi_lookup(df_b, pfx_b)
-        dpsi_c[ct] = cluster_abs_deltapsi_lookup(df_c, pfx_c)
+        min_padj_a[ct] = cluster_min_padj_lookup(df_a, pfx_a)
+        max_dpsi_a[ct] = cluster_max_abs_deltapsi_lookup(df_a, pfx_a)
+        min_padj_b[ct] = cluster_min_padj_lookup(df_b, pfx_b)
+        max_dpsi_b[ct] = cluster_max_abs_deltapsi_lookup(df_b, pfx_b)
+        min_padj_c[ct] = cluster_min_padj_lookup(df_c, pfx_c)
+        max_dpsi_c[ct] = cluster_max_abs_deltapsi_lookup(df_c, pfx_c)
 
     # Ordered list of clusters seen across all cell-type sheets (deduplicated)
     seen_clusters: dict[str, None] = {}  # ordered set via dict
     counts_by_ct: dict[str, dict[str, int]] = {}
-    # tracks which clusters qualified for each cell type
-    qualified_per_ct: dict[str, set[str]] = {ct: set() for ct in CELL_TYPES}
+    unique_sig_per_ct: dict[str, set[str]] = {ct: set() for ct in CELL_TYPES}
+    unchanged_all_per_ct: dict[str, set[str]] = {ct: set() for ct in CELL_TYPES}
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
@@ -264,24 +429,37 @@ def main() -> None:
                 )
                 continue
 
-            pa = df_a[col_a].astype(float)
-            da = df_a[dpsi_col_a].astype(float).abs()
-            pb = df_a["cluster"].map(padj_b[ct])
-            pc = df_a["cluster"].map(padj_c[ct])
-            db = df_a["cluster"].map(dpsi_b[ct])
-            dc = df_a["cluster"].map(dpsi_c[ct])
+            clusters_with_all = (
+                set(min_padj_a[ct].index)
+                & set(max_dpsi_a[ct].index)
+                & set(min_padj_b[ct].index)
+                & set(max_dpsi_b[ct].index)
+                & set(min_padj_c[ct].index)
+                & set(max_dpsi_c[ct].index)
+            )
 
-            # Exclude any cluster absent in B or C for this cell type.
-            valid_in_all = pb.notna() & pc.notna() & db.notna() & dc.notna()
+            unique_sig_clusters: set[str] = set()
+            sig_not_unique_clusters: set[str] = set()
+            unchanged_all_clusters: set[str] = set()
+            unchanged_not_all_clusters: set[str] = set()
+            not_informative_clusters: set[str] = set()
+            for cl in clusters_with_all:
+                status_a = classify_cluster_status(min_padj_a[ct].get(cl), max_dpsi_a[ct].get(cl))
+                status_b = classify_cluster_status(min_padj_b[ct].get(cl), max_dpsi_b[ct].get(cl))
+                status_c = classify_cluster_status(min_padj_c[ct].get(cl), max_dpsi_c[ct].get(cl))
 
-            sig_a = (pa < THRESHOLD) & (da > SIG_DELTAPSI_THRESHOLD)
-            unchanged_a = da < UNCHANGED_DELTAPSI_THRESHOLD
-            unchanged_b = db < UNCHANGED_DELTAPSI_THRESHOLD
-            unchanged_c = dc < UNCHANGED_DELTAPSI_THRESHOLD
+                if (status_a == "sig") and (status_b == "unchanged") and (status_c == "unchanged"):
+                    unique_sig_clusters.add(str(cl))
+                elif status_a == "sig":
+                    sig_not_unique_clusters.add(str(cl))
+                elif (status_a == "unchanged") and (status_b == "unchanged") and (status_c == "unchanged"):
+                    unchanged_all_clusters.add(str(cl))
+                elif status_a == "unchanged":
+                    unchanged_not_all_clusters.add(str(cl))
+                else:
+                    not_informative_clusters.add(str(cl))
 
-            unique_sig_mask = valid_in_all & sig_a & unchanged_b & unchanged_c
-            unchanged_all_mask = valid_in_all & unchanged_a & unchanged_b & unchanged_c
-            mask = unique_sig_mask | unchanged_all_mask
+            selected_clusters = unique_sig_clusters | unchanged_all_clusters
 
             # Keep only this cell type columns from each source file.
             keys = [
@@ -293,7 +471,7 @@ def main() -> None:
             cols_b = [c for c in ["cluster", "h_junction", "m_junction"] if c in df_b.columns] + cell_type_cols(df_b, pfx_b)
             cols_c = [c for c in ["cluster", "h_junction", "m_junction"] if c in df_c.columns] + cell_type_cols(df_c, pfx_c)
 
-            base = df_a.loc[mask, cols_a].copy()
+            base = df_a.loc[df_a["cluster"].astype(str).isin(selected_clusters), cols_a].copy()
 
             merge_keys = [c for c in ["cluster", "h_junction", "m_junction"] if c in base.columns and c in df_b.columns and c in df_c.columns]
             if merge_keys:
@@ -324,21 +502,28 @@ def main() -> None:
             result = result[keep_cols].reset_index(drop=True)
             result.to_excel(writer, sheet_name=ct, index=False)
 
-            unique_sig_clusters = set(df_a.loc[unique_sig_mask, "cluster"].astype(str))
-            unchanged_all_clusters = set(df_a.loc[unchanged_all_mask, "cluster"].astype(str))
-
-            n_unique_sig = len(unique_sig_clusters)
-            n_unchanged_all = len(unchanged_all_clusters)
+            n_unique_sig        = len(unique_sig_clusters)
+            n_sig_not_unique    = len(sig_not_unique_clusters)
+            n_unchanged_all     = len(unchanged_all_clusters)
+            n_unchanged_not_all = len(unchanged_not_all_clusters)
+            n_not_informative   = len(not_informative_clusters)
             counts_by_ct[ct] = {
-                "unique_sig": n_unique_sig,
-                "unchanged_all": n_unchanged_all,
+                "unique_sig":        n_unique_sig,
+                "sig_not_unique":    n_sig_not_unique,
+                "unchanged_all":     n_unchanged_all,
+                "unchanged_not_all": n_unchanged_not_all,
+                "not_informative":   n_not_informative,
             }
-            print(f"  [{ct}] {len(result):,} rows written  "
-                  f"(unique-sig: {n_unique_sig}, unchanged-all: {n_unchanged_all})")
+            unique_sig_per_ct[ct] = unique_sig_clusters
+            unchanged_all_per_ct[ct] = unchanged_all_clusters
 
-            for cl in result["cluster"].unique():
+            print(f"  [{ct}] {len(result):,} rows written  "
+                  f"(unique-sig: {n_unique_sig}, sig-not-unique: {n_sig_not_unique}, "
+                  f"unchanged-all: {n_unchanged_all}, unchanged-not-all: {n_unchanged_not_all}, "
+                  f"not-informative: {n_not_informative})")
+
+            for cl in sorted(selected_clusters):
                 seen_clusters[cl] = None
-                qualified_per_ct[ct].add(cl)
 
         # ------------------------------------------------------------------ #
         # Summary sheet                                                        #
@@ -346,42 +531,20 @@ def main() -> None:
         print(f"\nBuilding summary sheet for {len(seen_clusters):,} unique clusters …")
 
         cluster_genes = (
-            df_a.drop_duplicates(subset="cluster")[ ["cluster", "genes"] ]
+            df_a.drop_duplicates(subset="cluster")[["cluster", "genes"]]
             .set_index("cluster")["genes"]
         )
-
-        # Build a cluster -> {ct: sig/unchanged status in A} table
-        # Use first occurrence of each cluster in file A for p.adjust/abs_deltapsi lookup
-        cluster_padj_a: dict[str, dict[str, float]] = {}
-        cluster_dpsi_a: dict[str, dict[str, float]] = {}
-        for ct, (pfx_a, _, _) in CELL_TYPES.items():
-            col_a = padj_col(pfx_a)
-            dpsi_col_a = abs_deltapsi_col(pfx_a)
-            if col_a not in df_a.columns or dpsi_col_a not in df_a.columns:
-                continue
-            for cl, val in cluster_padj_lookup(df_a, pfx_a).items():
-                cluster_padj_a.setdefault(cl, {})[ct] = val
-            for cl, val in cluster_abs_deltapsi_lookup(df_a, pfx_a).items():
-                cluster_dpsi_a.setdefault(cl, {})[ct] = val
 
         rows = []
         for cl in seen_clusters:
             row: dict[str, str] = {"cluster": cl, "genes": str(cluster_genes.get(cl, ""))}
             for ct in CELL_TYPES:
-                if cl not in qualified_per_ct[ct]:
-                    row[ct] = ""  # did not qualify for this cell type
+                if cl in unique_sig_per_ct[ct]:
+                    row[ct] = "sig"
+                elif cl in unchanged_all_per_ct[ct]:
+                    row[ct] = "unchanged"
                 else:
-                    padj_val = cluster_padj_a.get(cl, {}).get(ct)
-                    dpsi_val = cluster_dpsi_a.get(cl, {}).get(ct)
-                    if padj_val is None or dpsi_val is None:
-                        row[ct] = ""
-                    else:
-                        if (padj_val < THRESHOLD) and (dpsi_val > SIG_DELTAPSI_THRESHOLD):
-                            row[ct] = "sig"
-                        elif dpsi_val < UNCHANGED_DELTAPSI_THRESHOLD:
-                            row[ct] = "unchanged"
-                        else:
-                            row[ct] = ""
+                    row[ct] = ""
             rows.append(row)
 
         summary_df = pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
@@ -393,9 +556,52 @@ def main() -> None:
     plot_stacked_counts(counts_by_ct, PLOT_STACKED)
     plot_summary_heatmap(summary_df, PLOT_HEATMAP)
     plot_shared_sig_counts(summary_df, PLOT_SHARED)
+    plot_summary_upset(
+        summary_df,
+        status="sig",
+        title="Shared significant clusters (summary sheet)",
+        output_png=PLOT_UPSET_SIG_PNG,
+        output_svg=PLOT_UPSET_SIG_SVG,
+    )
+    plot_summary_upset(
+        summary_df,
+        status="unchanged",
+        title="Shared unchanged clusters (summary sheet)",
+        output_png=PLOT_UPSET_UNCHANGED_PNG,
+        output_svg=PLOT_UPSET_UNCHANGED_SVG,
+    )
+
+    a_only_summary_df = build_a_only_summary(df_a)
+    plot_summary_upset(
+        a_only_summary_df,
+        status="sig",
+        title="Shared significant clusters (GSE115736_GSE116177 only)",
+        output_png=PLOT_A_ONLY_UPSET_SIG_PNG,
+        output_svg=PLOT_A_ONLY_UPSET_SIG_SVG,
+    )
+    plot_summary_upset(
+        a_only_summary_df,
+        status="unchanged",
+        title="Shared unchanged clusters (GSE115736_GSE116177 only)",
+        output_png=PLOT_A_ONLY_UPSET_UNCHANGED_PNG,
+        output_svg=PLOT_A_ONLY_UPSET_UNCHANGED_SVG,
+    )
 
     print(f"\nDone. Output written to:\n  {OUTPUT}")
-    print(f"Plots written to:\n  {PLOT_STACKED}\n  {PLOT_HEATMAP}\n  {PLOT_SHARED}")
+    print(
+        "Plots written to:\n"
+        f"  {PLOT_STACKED}\n"
+        f"  {PLOT_HEATMAP}\n"
+        f"  {PLOT_SHARED}\n"
+        f"  {PLOT_UPSET_SIG_PNG}\n"
+        f"  {PLOT_UPSET_SIG_SVG}\n"
+        f"  {PLOT_UPSET_UNCHANGED_PNG}\n"
+        f"  {PLOT_UPSET_UNCHANGED_SVG}\n"
+        f"  {PLOT_A_ONLY_UPSET_SIG_PNG}\n"
+        f"  {PLOT_A_ONLY_UPSET_SIG_SVG}\n"
+        f"  {PLOT_A_ONLY_UPSET_UNCHANGED_PNG}\n"
+        f"  {PLOT_A_ONLY_UPSET_UNCHANGED_SVG}"
+    )
 
 
 if __name__ == "__main__":

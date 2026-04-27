@@ -11,6 +11,12 @@ Outputs
 -------
   AS_clusters_value_fibroblast_HN6.txt  – merged table
   leafcutter_EMTAB5919H_EMTAB5919M/groups_file.txt  – HS / MM groups
+
+Notes
+-----
+This script does not classify clusters as sig/unchanged; it only prepares
+the merged fibroblast count matrix and groups file. Sig/unchanged criteria
+are applied downstream in merge_leafcutter_results.py.
 """
 
 import csv

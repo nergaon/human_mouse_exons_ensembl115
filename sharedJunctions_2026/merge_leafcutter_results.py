@@ -297,6 +297,7 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
 
     success_clusters = set()
     sig_clusters = set()
+    p_adjust_by_cluster: Dict[str, float] = {}
 
     with sig_file.open("r", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -310,6 +311,7 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
                 success_clusters.add(cluster)
 
                 p_adjust = _safe_float(row.get("p.adjust", ""))
+                p_adjust_by_cluster[cluster] = p_adjust
                 if p_adjust == p_adjust and p_adjust <= 0.05:
                     sig_clusters.add(cluster)
 
@@ -335,7 +337,11 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
     sig_dpsi_02 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.2)
     sig_dpsi_01 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.1)
     sig_dpsi_005 = sum(1 for c in sig_clusters if cluster_max_abs_dpsi.get(c, 0.0) >= 0.05)
-    unchanged_dpsi_lt_005 = sum(1 for c in success_clusters if cluster_max_abs_dpsi.get(c, 0.0) < 0.05)
+    unchanged_dpsi_lt_005 = sum(
+        1
+        for c in success_clusters
+        if (cluster_max_abs_dpsi.get(c, 0.0) < 0.05) or (p_adjust_by_cluster.get(c, float("nan")) > 0.05)
+    )
     not_informative = max(0, len(success_clusters) - sig_dpsi_01 - unchanged_dpsi_lt_005)
 
     return {
@@ -346,6 +352,61 @@ def summarize_leafcutter_celltype(cell_dir: Path) -> Dict[str, int]:
         "sig_dpsi_005": sig_dpsi_005,
         "unchanged_dpsi_lt_005": unchanged_dpsi_lt_005,
         "not_informative": not_informative,
+    }
+
+
+def load_summary_from_sum_table(sum_table_file: Path) -> Optional[Dict[str, int]]:
+    """Load summary counts from an existing sum_table_HN6.txt file."""
+    if not sum_table_file.exists():
+        return None
+
+    key_map = {
+        "Leafcutter success clusters": "success",
+        "Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)": "sig_dpsi_01",
+        "Unchanged (deltapsi<0.05 or p>0.05)": "unchanged_dpsi_lt_005",
+        "Not informative": "not_informative",
+    }
+    out: Dict[str, int] = {}
+
+    with sum_table_file.open("r", newline="") as fh:
+        reader = csv.reader(fh, delimiter="\t")
+        header = next(reader, None)
+        if not header:
+            return None
+
+        # Prefer Fibroblast column when present; otherwise use All.
+        value_idx = 1 if len(header) > 1 else None
+        if "Fibroblast" in header:
+            value_idx = header.index("Fibroblast")
+        elif "All" in header:
+            value_idx = header.index("All")
+
+        if value_idx is None:
+            return None
+
+        for row in reader:
+            if not row:
+                continue
+            label = row[0]
+            target = key_map.get(label)
+            if not target:
+                continue
+            raw = row[value_idx].strip() if value_idx < len(row) else ""
+            try:
+                out[target] = int(round(float(raw))) if raw else 0
+            except ValueError:
+                out[target] = 0
+
+    if not out:
+        return None
+    return {
+        "success": out.get("success", 0),
+        "sig_p05": 0,
+        "sig_dpsi_02": 0,
+        "sig_dpsi_01": out.get("sig_dpsi_01", 0),
+        "sig_dpsi_005": 0,
+        "unchanged_dpsi_lt_005": out.get("unchanged_dpsi_lt_005", 0),
+        "not_informative": out.get("not_informative", 0),
     }
 
 
@@ -418,8 +479,8 @@ def write_sum_table_and_stacked_bar(
 
         rows = [
             ("Leafcutter success clusters", "success"),
-            ("Leafcutter sig clusters (p<0.05, deltapsi>0.1)", "sig_dpsi_01"),
-            ("Unchanged (deltapsi<0.05)", "unchanged_dpsi_lt_005"),
+            ("Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)", "sig_dpsi_01"),
+            ("Unchanged (deltapsi<0.05 or p>0.05)", "unchanged_dpsi_lt_005"),
             ("Not informative", "not_informative"),
         ]
 
@@ -497,14 +558,14 @@ def write_combined_stacked_bar(
             x,
             unchanged_pct,
             bottom=not_informative_pct,
-            label="Unchanged (deltapsi<0.05)",
+            label="Unchanged (deltapsi<0.05 or p>0.05)",
             color=colors["unchanged"],
         )
         ax.bar(
             x,
             sig_dpsi_01_pct,
             bottom=bottom2,
-            label="Leafcutter sig clusters (p<0.05, deltapsi>0.1)",
+            label="Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)",
             color=colors["sig_dpsi_01"],
         )
 
@@ -655,7 +716,11 @@ def merge_leafcutter_results(
 def main() -> None:
     metadata      = load_metadata(METADATA_FILE)
     fibro_dir = SHARED_JUNCTIONS_DIR / "leafcutter_EMTAB5919H_EMTAB5919M"
-    fibro_summary = summarize_leafcutter_celltype(fibro_dir) if fibro_dir.exists() else None
+    fibro_summary = None
+    if fibro_dir.exists():
+        fibro_summary = summarize_leafcutter_celltype(fibro_dir)
+        if fibro_summary.get("success", 0) == 0:
+            fibro_summary = load_summary_from_sum_table(fibro_dir / "sum_table_HN6.txt") or fibro_summary
 
     leafcutter_dirs = sorted(d for d in SHARED_JUNCTIONS_DIR.iterdir()
                              if d.is_dir() and d.name.startswith("leafcutter_"))
@@ -667,6 +732,7 @@ def main() -> None:
         if not match:
             continue
         dataset_a, dataset_b = match.group(1), match.group(2)
+
         print(f"Processing {leaf_dir.name} ({dataset_a} vs {dataset_b})...")
         merge_leafcutter_results(leaf_dir, dataset_a, dataset_b, metadata)
 

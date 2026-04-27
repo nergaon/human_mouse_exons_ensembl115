@@ -8,16 +8,25 @@ Style matches plot_bar_success_clusters_HN6.py:
 - samples from the same dataset are grouped together
 
 Outputs:
-- Per-cell plots under: <base>/4dbPlots/<cell>/
+- Per-cell plots under: <base>/4dbPlots/<cell>/<category>/
     Filename: <gene>_<cluster>_<cell>.png
-- Combined all-cell plots under: <base>/4dbPlots/all_cell_types/
+- Combined all-cell plots under: <base>/4dbPlots/all_cell_types/<category>/
     Filename: <gene>_<cluster>_all_cells.png
+
+Categories are based on all 3 comparisons:
+- sig: H1_M1 has p<=0.05 and abs(deltapsi)>=0.1,
+       and both H1_H2 and M1_M2 are unchanged
+- unchange: all three comparisons are unchanged
+
+Only clusters listed in unique_sig_clusters_HN6.xlsx summary sheet are considered,
+and only clusters marked as sig/unchanged in at least one cell type are plotted.
 """
 
 import argparse
 import re
+import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,6 +56,13 @@ COMPARISON_DATASETS = [
     ("M1_M2", ("GSE116177", "GSE180020")),
 ]
 CELL_ORDER = ["Mono", "NveB", "NK", "CD8", "CD4"]
+CATEGORY_ORDER = ["sig", "unchange"]
+
+P_THRESHOLD = 0.05
+SIG_DELTAPSI_THRESHOLD = 0.1
+UNCHANGED_DELTAPSI_THRESHOLD = 0.05
+SIG_COMPARISON = "H1_M1"
+OTHER_COMPARISONS = ("H1_H2", "M1_M2")
 
 VALUE_FILE = DEFAULT_BASE_DIR / "AS_clusters_value_HN6.txt"
 GENE_TABLE_FILES = [
@@ -54,6 +70,7 @@ GENE_TABLE_FILES = [
     DEFAULT_BASE_DIR / "leafcutter_GSE115736_GSE60424" / "clusters_sum_table_HN6.txt",
     DEFAULT_BASE_DIR / "leafcutter_GSE116177_GSE180020" / "clusters_sum_table_HN6.txt",
 ]
+SUMMARY_XLSX = DEFAULT_BASE_DIR / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6.xlsx"
 
 
 def sanitize_filename(text: str) -> str:
@@ -243,6 +260,104 @@ def build_stat_label(
     p_adjust = format_p_adjust(lookup_p_adjust(cluster, cell, comparison_label, p_adjust_map))
     abs_deltapsi = format_p_adjust(lookup_abs_deltapsi(cluster, cell, comparison_label, abs_deltapsi_map))
     return f"{comparison_label}: p={p_adjust} | deltapsi={abs_deltapsi}"
+
+
+def load_cluster_statuses_from_summary(summary_xlsx: Path) -> Dict[str, Dict[str, str]]:
+    """Load status per (cluster, cell) from summary sheet in unique_sig_clusters_HN6.xlsx."""
+    if not summary_xlsx.exists():
+        raise FileNotFoundError(f"Missing summary file: {summary_xlsx}")
+
+    summary_df = pd.read_excel(summary_xlsx, sheet_name="summary")
+    if "cluster" not in summary_df.columns:
+        raise ValueError(f"Summary sheet is missing required 'cluster' column: {summary_xlsx}")
+
+    status_map: Dict[str, Dict[str, str]] = {}
+    for _, row in summary_df.iterrows():
+        cluster = str(row.get("cluster", "")).strip()
+        if not cluster:
+            continue
+
+        per_cell: Dict[str, str] = {}
+        for cell in CELL_ORDER:
+            raw = str(row.get(cell, "")).strip().lower()
+            if raw == "sig":
+                per_cell[cell] = "sig"
+            elif raw in {"unchanged", "unchange"}:
+                per_cell[cell] = "unchange"
+
+        if per_cell:
+            status_map[cluster] = per_cell
+
+    return status_map
+
+
+def is_unchanged_in_comparison(
+    cluster: str,
+    cell: str,
+    comparison_label: str,
+    p_adjust_map: Dict[str, Dict[str, Dict[str, float]]],
+    abs_deltapsi_map: Dict[str, Dict[str, Dict[str, float]]],
+) -> Optional[bool]:
+    p_val = lookup_p_adjust(cluster, cell, comparison_label, p_adjust_map)
+    dpsi_val = lookup_abs_deltapsi(cluster, cell, comparison_label, abs_deltapsi_map)
+    if p_val is None or dpsi_val is None:
+        return None
+    return (p_val > P_THRESHOLD) or (dpsi_val < UNCHANGED_DELTAPSI_THRESHOLD)
+
+
+def classify_cluster_cell(
+    cluster: str,
+    cell: str,
+    p_adjust_map: Dict[str, Dict[str, Dict[str, float]]],
+    abs_deltapsi_map: Dict[str, Dict[str, Dict[str, float]]],
+) -> Optional[str]:
+    """Return category for one (cluster, cell) using 3-comparison rules."""
+    p_sig = lookup_p_adjust(cluster, cell, SIG_COMPARISON, p_adjust_map)
+    dpsi_sig = lookup_abs_deltapsi(cluster, cell, SIG_COMPARISON, abs_deltapsi_map)
+
+    if p_sig is None or dpsi_sig is None:
+        return None
+
+    unchanged_sig = is_unchanged_in_comparison(
+        cluster, cell, SIG_COMPARISON, p_adjust_map, abs_deltapsi_map
+    )
+    unchanged_other = [
+        is_unchanged_in_comparison(cluster, cell, comp, p_adjust_map, abs_deltapsi_map)
+        for comp in OTHER_COMPARISONS
+    ]
+    if unchanged_sig is None or any(v is None for v in unchanged_other):
+        return None
+
+    sig_in_hm = (p_sig <= P_THRESHOLD) and (dpsi_sig >= SIG_DELTAPSI_THRESHOLD)
+    others_unchanged = all(bool(v) for v in unchanged_other)
+    if sig_in_hm and others_unchanged:
+        return "sig"
+
+    if bool(unchanged_sig) and all(bool(v) for v in unchanged_other):
+        return "unchange"
+
+    return None
+
+
+def classify_cluster_all_cells(
+    cluster: str,
+    cells_to_consider: List[str],
+    p_adjust_map: Dict[str, Dict[str, Dict[str, float]]],
+    abs_deltapsi_map: Dict[str, Dict[str, Dict[str, float]]],
+) -> Optional[str]:
+    """Classify one cluster for all-cell plot from per-cell 3-comparison rules."""
+    if not cells_to_consider:
+        return None
+
+    per_cell = [
+        classify_cluster_cell(cluster, cell, p_adjust_map, abs_deltapsi_map)
+        for cell in cells_to_consider
+    ]
+    if any(cat == "sig" for cat in per_cell):
+        return "sig"
+    if any(cat == "unchange" for cat in per_cell):
+        return "unchange"
+    return None
 
 
 def load_counts_table(value_file: Path) -> pd.DataFrame:
@@ -513,17 +628,32 @@ def run(base_dir: Path, output_dir: Path) -> None:
     gene_map = load_gene_map(GENE_TABLE_FILES)
     p_adjust_map = load_p_adjust_map(GENE_TABLE_FILES)
     abs_deltapsi_map = load_abs_deltapsi_map(GENE_TABLE_FILES)
+    summary_statuses = load_cluster_statuses_from_summary(SUMMARY_XLSX)
+
+    clusters_from_summary: Set[str] = set(summary_statuses.keys())
+    if not clusters_from_summary:
+        raise ValueError(f"No plottable sig/unchange clusters found in summary sheet: {SUMMARY_XLSX}")
 
     all_samples = [c for c in counts_df.columns if c != "cluster"]
     samples_by_cell = collect_cell_samples(all_samples)
 
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     for cell in CELL_ORDER:
-        (output_dir / cell).mkdir(parents=True, exist_ok=True)
+        for category in CATEGORY_ORDER:
+            (output_dir / cell / category).mkdir(parents=True, exist_ok=True)
     all_cells_dir = output_dir / "all_cell_types"
-    all_cells_dir.mkdir(parents=True, exist_ok=True)
+    for category in CATEGORY_ORDER:
+        (all_cells_dir / category).mkdir(parents=True, exist_ok=True)
 
-    clusters = sorted([c for c in counts_df["cluster"].dropna().astype(str).unique().tolist() if c])
+    clusters = sorted(
+        [
+            c
+            for c in counts_df["cluster"].dropna().astype(str).unique().tolist()
+            if c and c in clusters_from_summary
+        ]
+    )
 
     n_cell_plots = 0
     n_all_cells_plots = 0
@@ -556,7 +686,10 @@ def run(base_dir: Path, output_dir: Path) -> None:
             )
             title = f"{gene}_{cluster}_{cell}"
             out_name = f"{safe_gene}_{safe_cluster}_{cell}.png"
-            out_path = output_dir / cell / out_name
+            category = classify_cluster_cell(cluster, cell, p_adjust_map, abs_deltapsi_map)
+            if category not in CATEGORY_ORDER:
+                continue
+            out_path = output_dir / cell / category / out_name
 
             cluster_color_map = plot_stacked_sample_panels(
                 psi_cluster=psi_cluster,
@@ -589,7 +722,16 @@ def run(base_dir: Path, output_dir: Path) -> None:
                 abs_deltapsi_map,
             )
             title_all = f"{gene}_{cluster}_all_cells"
-            out_all = all_cells_dir / f"{safe_gene}_{safe_cluster}_all_cells.png"
+            cells_with_samples = [cell for cell in CELL_ORDER if samples_by_cell.get(cell, [])]
+            all_cells_category = classify_cluster_all_cells(
+                cluster,
+                cells_with_samples,
+                p_adjust_map,
+                abs_deltapsi_map,
+            )
+            if all_cells_category not in CATEGORY_ORDER:
+                continue
+            out_all = all_cells_dir / all_cells_category / f"{safe_gene}_{safe_cluster}_all_cells.png"
             cluster_color_map = plot_stacked_sample_panels(
                 psi_cluster=psi_all,
                 counts_cluster=counts_all,

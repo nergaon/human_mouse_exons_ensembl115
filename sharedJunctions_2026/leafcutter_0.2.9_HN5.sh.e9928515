@@ -1,0 +1,5 @@
+Loading required package: Rcpp
+Loading required package: doMC
+Loading required package: foreach
+Loading required package: iterators
+Loading required package: parallel

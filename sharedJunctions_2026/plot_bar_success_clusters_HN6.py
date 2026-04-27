@@ -93,7 +93,9 @@ def build_xtick_labels(sample_names: List[str]) -> List[str]:
 
 def sanitize_filename(text: str) -> str:
     text = text.replace("$cl$", "_")
-    text = re.sub(r"[^A-Za-z0-9._:=+-]+", "_", text)
+    # Replace colons with underscores (common in cluster IDs like chr1:clu_123)
+    text = text.replace(":", "_")
+    text = re.sub(r"[^A-Za-z0-9._=+-]+", "_", text)
     return re.sub(r"_+", "_", text)
 
 
@@ -182,6 +184,34 @@ def load_as_value_table(value_file: Path) -> pd.DataFrame:
     return df
 
 
+def load_max_deltapsi_per_cluster(comp_dir: Path) -> Dict[str, float]:
+    """Load max abs(deltapsi) per cluster from effect sizes file."""
+    effect_sizes_file = comp_dir / "leafcutter_ds_effect_sizes.txt"
+    max_dpsi: Dict[str, float] = {}
+    
+    if effect_sizes_file.exists():
+        try:
+            effect_df = pd.read_csv(effect_sizes_file, sep="\t")
+            if "intron" in effect_df.columns and "deltapsi" in effect_df.columns:
+                for _, row in effect_df.iterrows():
+                    intron = str(row["intron"]).strip()
+                    dpsi = row["deltapsi"]
+                    if pd.notna(dpsi):
+                        abs_dpsi = abs(float(dpsi))
+                        # Extract cluster ID from intron: chr1:224424654:224431477:clu_40856
+                        # Should produce: chr1:clu_40856
+                        parts = intron.split(":")
+                        if len(parts) >= 4:
+                            chrom = parts[0]
+                            cluster_id = parts[-1]  # e.g., clu_40856
+                            cluster_key = f"{chrom}:{cluster_id}"
+                            max_dpsi[cluster_key] = max(max_dpsi.get(cluster_key, 0.0), abs_dpsi)
+        except Exception as e:
+            print(f"    Warning: could not load effect sizes: {e}")
+    
+    return max_dpsi
+
+
 def iter_cell_units(comp_dir: Path) -> List[tuple[str, Path, Path, Path]]:
     """Return processing units as (cell_name, output_dir, groups_file, sig_file)."""
     units: List[tuple[str, Path, Path, Path]] = []
@@ -215,6 +245,9 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
         if clean and genes_figs_root.exists():
             shutil.rmtree(genes_figs_root)
         genes_figs_root.mkdir(parents=True, exist_ok=True)
+
+        # Pre-load max deltapsi per cluster for this comparison
+        max_dpsi_by_cluster = load_max_deltapsi_per_cluster(comp_dir)
 
         for cell_name, out_dir, groups_file, sig_file in iter_cell_units(comp_dir):
             print(f"  Cell type: {cell_name}")
@@ -261,11 +294,11 @@ def run(base_dir: Path, value_file: Path, clean: bool, max_clusters: int) -> Non
                     row = sig_row.iloc[0]
                     gene_name = str(row.get("genes", ""))
                     p_raw = row.get("p.adjust", np.nan)
-                    p_adjust = f"{float(p_raw):.3g}" if pd.notna(p_raw) else "NA"
-                    if "deltapsi" in row and pd.notna(row.get("deltapsi", np.nan)):
-                        deltapsi = f"{float(row.get('deltapsi')):.3g}"
-                    elif "abs_deltapsi" in row and pd.notna(row.get("abs_deltapsi", np.nan)):
-                        deltapsi = f"{float(row.get('abs_deltapsi')):.3g}"
+                    p_adjust = f"{float(p_raw):.2f}" if pd.notna(p_raw) else "NA"
+                
+                # Use max deltapsi from effect sizes file
+                if cluster in max_dpsi_by_cluster:
+                    deltapsi = f"{max_dpsi_by_cluster[cluster]:.2f}"
 
                 if gene_name:
                     title = f"{cell_name}_{gene_name}_{cluster}_p={p_adjust}_deltapsi={deltapsi}"
