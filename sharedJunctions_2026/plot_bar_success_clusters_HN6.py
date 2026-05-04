@@ -77,8 +77,17 @@ def build_positions_by_dataset(
     return positions
 
 
+def sort_samples_by_dataset(sample_names: List[str]) -> List[str]:
+    """Sort samples so MM comes first, then HS."""
+    def sort_key(sample_name: str):
+        dataset = extract_dataset_id(sample_name)
+        order = {"MM": 0, "HS": 1}
+        return (order.get(dataset, 2), sample_name)
+    return sorted(sample_names, key=sort_key)
+
+
 def build_xtick_labels(sample_names: List[str]) -> List[str]:
-    """Show one label per contiguous sample group block (e.g. HS ... MM)."""
+    """Show one label per contiguous sample group block (e.g. MM ... HS)."""
     out = [" " for _ in sample_names]
     prev_group = None
 
@@ -117,6 +126,9 @@ def plot_cluster_bars(
     legend_color_map = create_color_map(intron_legend, legend_color_map)
 
     original_samples = psi_cluster.columns.tolist()
+    # Sort samples so MM comes first, then HS
+    original_samples = sort_samples_by_dataset(original_samples)
+    psi_cluster = psi_cluster[original_samples]
 
     # Keep count and PSI column order identical and use shared x positions.
     value_cluster = value_cluster[original_samples]
@@ -151,7 +163,7 @@ def plot_cluster_bars(
     ax1.set_ylabel("PSI")
 
     ax2.set_xticks(r)
-    ax2.set_xticklabels(labels, fontsize=8, rotation=0, ha="center")
+    ax2.set_xticklabels(labels, fontsize=12, rotation=0, ha="center")
     ax2.tick_params(axis="x", which="both", length=0)
     ax2.set_ylabel("Counts")
 

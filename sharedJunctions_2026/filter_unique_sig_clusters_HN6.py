@@ -41,8 +41,10 @@ BASE = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJu
 FILE_A = BASE / "leafcutter_GSE115736_GSE116177" / "clusters_sum_table_HN6.txt"
 FILE_B = BASE / "leafcutter_GSE115736_GSE60424"  / "clusters_sum_table_HN6.txt"
 FILE_C = BASE / "leafcutter_GSE116177_GSE180020"  / "clusters_sum_table_HN6.txt"
+FILE_FIBRO = BASE / "leafcutter_EMTAB5919H_EMTAB5919M" / "clusters_sum_table_HN6.txt"
 OUTPUT = BASE / "leafcutter_GSE115736_GSE116177"  / "unique_sig_clusters_HN6.xlsx"
 PLOT_STACKED = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_counts_stacked.png"
+PLOT_STACKED_SUCCESS_PCT = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_counts_stacked_success_pct.png"
 PLOT_HEATMAP = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_summary_heatmap.png"
 PLOT_SHARED = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_shared_sig_counts.png"
 PLOT_UPSET_SIG_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6_upset_sig.png"
@@ -66,6 +68,8 @@ CELL_TYPES: dict[str, tuple[str, str, str]] = {
     "NK":   ("NK",   "NK",   "NK"),
     "Mono": ("Mono", "Mono", "Mono"),
 }
+FIBROBLAST_CT = "Fibroblast"
+SUMMARY_CELL_TYPES = list(CELL_TYPES.keys()) + [FIBROBLAST_CT]
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +95,21 @@ def cluster_max_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
     if col not in df.columns:
         return pd.Series(dtype=float)
     return df[col].astype(float).abs().groupby(df["cluster"], dropna=False).max().astype(float)
+
+
+def cluster_success_count_lookup(df: pd.DataFrame, prefix: str) -> int:
+    """Return number of clusters with at least one numeric p.adjust (proxy for success)."""
+    return len(cluster_success_clusters(df, prefix))
+
+
+def cluster_success_clusters(df: pd.DataFrame, prefix: str) -> set[str]:
+    """Return cluster ids with at least one numeric p.adjust value."""
+    col = padj_col(prefix)
+    if col not in df.columns:
+        return set()
+    vals = pd.to_numeric(df[col], errors="coerce")
+    has_value_by_cluster = vals.groupby(df["cluster"], dropna=False).apply(lambda s: s.notna().any())
+    return set(has_value_by_cluster[has_value_by_cluster].index.astype(str))
 
 
 def classify_cluster_status(min_padj: float | None, max_abs_dpsi: float | None) -> str:
@@ -127,6 +146,27 @@ def first_gene_label(genes_text: str) -> str:
         return ""
     return re.split(r"[;,|]", txt, maxsplit=1)[0].strip()
 
+
+def sort_summary_by_status_pattern(summary_df: pd.DataFrame, ct_order: list[str]) -> pd.DataFrame:
+    """Sort rows by the left-to-right pattern across status columns."""
+    if summary_df.empty:
+        return summary_df
+
+    sort_df = summary_df.copy()
+    sort_cols: list[str] = []
+    status_rank = {"sig": 0, "unchanged": 1, "": 2}
+    for ct in ct_order:
+        sort_col = f"__sort_{ct}"
+        sort_cols.append(sort_col)
+        sort_df[sort_col] = sort_df.get(ct, "").fillna("").astype(str).map(status_rank).fillna(2).astype(int)
+
+    sort_df = sort_df.sort_values(
+        sort_cols + ["genes", "cluster"],
+        ascending=[True] * (len(sort_cols) + 2),
+        kind="stable",
+    )
+    return sort_df.drop(columns=sort_cols).reset_index(drop=True)
+
 def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Path) -> None:
     """Plot stacked cluster counts: 5 categories per cell type.
 
@@ -158,12 +198,12 @@ def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Pa
     plt.close("all")
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
-    ax.bar(x, v_usig,   color=sig_color,   label="unique-sig (sig in H-M, unchanged in H-H & M-M)")
+    ax.bar(x, v_usig,   color=sig_color,   label="high confidence splicing change")
     ax.bar(x, v_snu,    bottom=b2, color=sig_color,   hatch="///", edgecolor="white",
-           label="sig in H-M (controls not all unchanged)")
-    ax.bar(x, v_uall,   bottom=b3, color=unch_color,  label="unchanged-all (unchanged in all three)")
+            label="low confidance splicing change")
+    ax.bar(x, v_uall,   bottom=b3, color=unch_color,  label="high confidence splicing conserved")
     ax.bar(x, v_unall,  bottom=b4, color=unch_color,  hatch="///", edgecolor="white",
-           label="unchanged in H-M (controls not all unchanged)")
+            label="low confidance splicing conserved")
     ax.bar(x, v_noinfo, bottom=b5, color=noinfo_color, edgecolor="#aaaaaa",
            label="not informative")
 
@@ -175,15 +215,75 @@ def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Pa
     ax.set_xticks(x)
     ax.set_xticklabels(ct_order)
     ax.set_ylabel("Clusters")
-    ax.set_title("Cluster counts per cell type (informative clusters in A)")
-    ax.legend(frameon=False, fontsize=7, loc="upper right")
+    ax.set_title("Cluster counts per cell type")
+    ax.legend(frameon=False, fontsize=7, loc="upper center",
+              bbox_to_anchor=(0.5, -0.18), ncol=2)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200)
+    fig.subplots_adjust(bottom=0.32)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close("all")
+
+
+def plot_stacked_counts_success_pct(counts_by_ct: dict[str, dict[str, int]], output_path: Path) -> None:
+    """Plot stacked percentages where each cell type's success clusters are 100%."""
+    ct_order = list(CELL_TYPES.keys())
+    v_usig  = np.array([counts_by_ct.get(ct, {}).get("unique_sig",        0) for ct in ct_order], dtype=float)
+    v_snu   = np.array([counts_by_ct.get(ct, {}).get("sig_not_unique",    0) for ct in ct_order], dtype=float)
+    v_uall  = np.array([counts_by_ct.get(ct, {}).get("unchanged_all",     0) for ct in ct_order], dtype=float)
+    v_unall = np.array([counts_by_ct.get(ct, {}).get("unchanged_not_all", 0) for ct in ct_order], dtype=float)
+    v_noinfo= np.array([counts_by_ct.get(ct, {}).get("not_informative",   0) for ct in ct_order], dtype=float)
+    success_counts = np.array(
+        [counts_by_ct.get(ct, {}).get("success_clusters", 0) for ct in ct_order],
+        dtype=float,
+    )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p_usig = np.where(success_counts > 0, (v_usig / success_counts) * 100.0, 0.0)
+        p_snu = np.where(success_counts > 0, (v_snu / success_counts) * 100.0, 0.0)
+        p_uall = np.where(success_counts > 0, (v_uall / success_counts) * 100.0, 0.0)
+        p_unall = np.where(success_counts > 0, (v_unall / success_counts) * 100.0, 0.0)
+        p_noinfo = np.where(success_counts > 0, (v_noinfo / success_counts) * 100.0, 0.0)
+
+    b2 = p_usig
+    b3 = b2 + p_snu
+    b4 = b3 + p_uall
+    b5 = b4 + p_unall
+
+    sig_color = "#1f77b4"
+    unch_color = "#bdbdbd"
+    noinfo_color = "#f5f0e8"
+
+    x = np.arange(len(ct_order))
+    plt.close("all")
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+
+    ax.bar(x, p_usig, color=sig_color, label="high confidence splicing change")
+    ax.bar(x, p_snu, bottom=b2, color=sig_color, hatch="///", edgecolor="white",
+           label="low confidance splicing change")
+    ax.bar(x, p_uall, bottom=b3, color=unch_color, label="high confidence splicing conserved")
+    ax.bar(x, p_unall, bottom=b4, color=unch_color, hatch="///", edgecolor="white",
+           label="low confidance splicing conserved")
+    ax.bar(x, p_noinfo, bottom=b5, color=noinfo_color, edgecolor="#aaaaaa",
+           label="not informative")
+
+    for i, total in enumerate(success_counts.astype(int)):
+        ax.text(i, 102, str(total), ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(ct_order)
+    ax.set_ylim(0, 110)
+    ax.set_ylabel("Percent of success clusters (%)")
+    ax.set_title("Cluster counts per cell type")
+    ax.legend(frameon=False, fontsize=7, loc="upper center",
+              bbox_to_anchor=(0.5, -0.18), ncol=3)
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.32)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close("all")
 
 def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     """Plot cluster x cell-type heatmap: sig=blue, unchanged=light yellow, blank=light grey."""
-    ct_order = list(CELL_TYPES.keys())
+    ct_order = [ct for ct in SUMMARY_CELL_TYPES if ct in summary_df.columns]
     if summary_df.empty:
         return
 
@@ -191,8 +291,6 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     heat_df["genes"] = heat_df.get("genes", "").fillna("").astype(str)
     for ct in ct_order:
         heat_df[ct] = heat_df[ct].replace("", float("nan")).map({"sig": 1.0, "unchanged": 0.0})
-    heat_df["sig_count"] = heat_df[ct_order].sum(axis=1, skipna=True)
-    heat_df = heat_df.sort_values(["sig_count", "cluster"], ascending=[False, True]).reset_index(drop=True)
 
     row_labels = [first_gene_label(gn) for gn in heat_df["genes"]]
     n_rows = len(heat_df)
@@ -240,11 +338,13 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
 
 def plot_shared_sig_counts(summary_df: pd.DataFrame, output_path: Path) -> None:
     """Plot how many clusters are shared by exactly 1..5 significant cell types."""
-    if summary_df.empty or "n_sig" not in summary_df.columns:
+    ct_order = [ct for ct in SUMMARY_CELL_TYPES if ct in summary_df.columns]
+    if summary_df.empty or not ct_order:
         return
 
-    x_vals = [1, 2, 3, 4, 5]
-    counts = [int((summary_df["n_sig"] == x).sum()) for x in x_vals]
+    n_sig = (summary_df[ct_order] == "sig").sum(axis=1)
+    x_vals = list(range(1, len(ct_order) + 1))
+    counts = [int((n_sig == x).sum()) for x in x_vals]
 
     plt.close("all")
     fig, ax = plt.subplots(figsize=(6.6, 4.2))
@@ -289,7 +389,7 @@ def plot_summary_upset(
     max_combinations: int = 40,
 ) -> None:
     """Plot UpSet-style bar + membership matrix using summary-sheet clusters only."""
-    ct_order = list(CELL_TYPES.keys())
+    ct_order = [ct for ct in SUMMARY_CELL_TYPES if ct in summary_df.columns]
     intersections = _exclusive_intersections_from_summary(summary_df, status, ct_order)
     if not intersections:
         print(f"  no '{status}' combinations to plot")
@@ -338,6 +438,7 @@ def plot_summary_upset(
     ax_matrix.set_yticklabels(list(reversed(ct_order)))
     ax_matrix.set_ylim(-0.7, len(ct_order) - 0.3)
     ax_matrix.set_xlabel("Shared-cluster combinations (sorted by size)")
+    ax_matrix.set_xticklabels([])
     ax_matrix.grid(axis="x", linestyle=":", linewidth=0.4, alpha=0.4)
 
     fig.tight_layout()
@@ -372,11 +473,7 @@ def build_a_only_summary(df_a: pd.DataFrame) -> pd.DataFrame:
         if has_any_status:
             rows.append(row)
 
-    a_only_df = pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
-    if not a_only_df.empty:
-        ct_cols = list(CELL_TYPES.keys())
-        a_only_df["n_sig"] = (a_only_df[ct_cols] == "sig").sum(axis=1)
-    return a_only_df
+    return pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
 
 
 # ---------------------------------------------------------------------------
@@ -387,10 +484,12 @@ def main() -> None:
     df_a = pd.read_csv(FILE_A, sep="\t")
     df_b = pd.read_csv(FILE_B, sep="\t")
     df_c = pd.read_csv(FILE_C, sep="\t")
+    df_fibro = pd.read_csv(FILE_FIBRO, sep="\t")
 
     print(f"  File A: {len(df_a):,} rows")
     print(f"  File B: {len(df_b):,} rows")
     print(f"  File C: {len(df_c):,} rows")
+    print(f"  Fibroblast file: {len(df_fibro):,} rows")
 
     # Pre-build cluster-level metrics for each comparison.
     min_padj_a: dict[str, pd.Series] = {}
@@ -406,6 +505,20 @@ def main() -> None:
         max_dpsi_b[ct] = cluster_max_abs_deltapsi_lookup(df_b, pfx_b)
         min_padj_c[ct] = cluster_min_padj_lookup(df_c, pfx_c)
         max_dpsi_c[ct] = cluster_max_abs_deltapsi_lookup(df_c, pfx_c)
+
+    success_clusters_a: dict[str, int] = {
+        ct: cluster_success_count_lookup(df_a, pfx_a)
+        for ct, (pfx_a, _, _) in CELL_TYPES.items()
+    }
+    fibro_success_clusters = cluster_success_clusters(df_fibro, FIBROBLAST_CT)
+    fibro_min_padj = cluster_min_padj_lookup(df_fibro, FIBROBLAST_CT)
+    fibro_max_dpsi = cluster_max_abs_deltapsi_lookup(df_fibro, FIBROBLAST_CT)
+    fibro_status_by_cluster: dict[str, str] = {}
+    for cl in fibro_success_clusters:
+        fibro_status_by_cluster[cl] = classify_cluster_status(
+            fibro_min_padj.get(cl),
+            fibro_max_dpsi.get(cl),
+        )
 
     # Ordered list of clusters seen across all cell-type sheets (deduplicated)
     seen_clusters: dict[str, None] = {}  # ordered set via dict
@@ -513,6 +626,7 @@ def main() -> None:
                 "unchanged_all":     n_unchanged_all,
                 "unchanged_not_all": n_unchanged_not_all,
                 "not_informative":   n_not_informative,
+                "success_clusters":  success_clusters_a.get(ct, 0),
             }
             unique_sig_per_ct[ct] = unique_sig_clusters
             unchanged_all_per_ct[ct] = unchanged_all_clusters
@@ -526,14 +640,39 @@ def main() -> None:
                 seen_clusters[cl] = None
 
         # ------------------------------------------------------------------ #
+        # Fibroblast sheet                                                    #
+        # ------------------------------------------------------------------ #
+        fibro_keys = [
+            c
+            for c in ["cluster", "h_junction", "m_junction", "genes", "rank_h", "rank_m"]
+            if c in df_fibro.columns
+        ]
+        fibro_cols = fibro_keys + cell_type_cols(df_fibro, FIBROBLAST_CT)
+        fibro_result = (
+            df_fibro.loc[df_fibro["cluster"].astype(str).isin(fibro_success_clusters), fibro_cols]
+            .copy()
+            .reset_index(drop=True)
+        )
+        fibro_result.to_excel(writer, sheet_name=FIBROBLAST_CT, index=False)
+        print(f"  [{FIBROBLAST_CT}] {len(fibro_result):,} rows written (success clusters: {len(fibro_success_clusters)})")
+
+        for cl in sorted(fibro_success_clusters):
+            seen_clusters[cl] = None
+
+        # ------------------------------------------------------------------ #
         # Summary sheet                                                        #
         # ------------------------------------------------------------------ #
         print(f"\nBuilding summary sheet for {len(seen_clusters):,} unique clusters …")
 
-        cluster_genes = (
+        cluster_genes_a = (
             df_a.drop_duplicates(subset="cluster")[["cluster", "genes"]]
             .set_index("cluster")["genes"]
         )
+        cluster_genes_fibro = (
+            df_fibro.drop_duplicates(subset="cluster")[["cluster", "genes"]]
+            .set_index("cluster")["genes"]
+        )
+        cluster_genes = cluster_genes_a.combine_first(cluster_genes_fibro)
 
         rows = []
         for cl in seen_clusters:
@@ -545,28 +684,30 @@ def main() -> None:
                     row[ct] = "unchanged"
                 else:
                     row[ct] = ""
-            rows.append(row)
+            row[FIBROBLAST_CT] = fibro_status_by_cluster.get(cl, "")
+            if any(row[ct] for ct in CELL_TYPES):
+                rows.append(row)
 
-        summary_df = pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
-        ct_cols = list(CELL_TYPES.keys())
-        summary_df["n_sig"] = (summary_df[ct_cols] == "sig").sum(axis=1)
+        summary_df = pd.DataFrame(rows, columns=["cluster", "genes"] + SUMMARY_CELL_TYPES)
+        summary_df = sort_summary_by_status_pattern(summary_df, SUMMARY_CELL_TYPES)
         summary_df.to_excel(writer, sheet_name="summary", index=False)
         print(f"  summary sheet: {len(summary_df):,} rows")
 
     plot_stacked_counts(counts_by_ct, PLOT_STACKED)
+    plot_stacked_counts_success_pct(counts_by_ct, PLOT_STACKED_SUCCESS_PCT)
     plot_summary_heatmap(summary_df, PLOT_HEATMAP)
     plot_shared_sig_counts(summary_df, PLOT_SHARED)
     plot_summary_upset(
         summary_df,
         status="sig",
-        title="Shared significant clusters (summary sheet)",
+        title="Shared significant clusters",
         output_png=PLOT_UPSET_SIG_PNG,
         output_svg=PLOT_UPSET_SIG_SVG,
     )
     plot_summary_upset(
         summary_df,
         status="unchanged",
-        title="Shared unchanged clusters (summary sheet)",
+        title="Shared unchanged clusters",
         output_png=PLOT_UPSET_UNCHANGED_PNG,
         output_svg=PLOT_UPSET_UNCHANGED_SVG,
     )
@@ -591,6 +732,7 @@ def main() -> None:
     print(
         "Plots written to:\n"
         f"  {PLOT_STACKED}\n"
+        f"  {PLOT_STACKED_SUCCESS_PCT}\n"
         f"  {PLOT_HEATMAP}\n"
         f"  {PLOT_SHARED}\n"
         f"  {PLOT_UPSET_SIG_PNG}\n"

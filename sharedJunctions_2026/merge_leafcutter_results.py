@@ -28,6 +28,8 @@ COMPARISON_LABELS: Dict[Tuple[str, str], str] = {
     ("GSE116177", "GSE180020"): "Mouse vs Mouse",
 }
 
+POSSIBLE_AS_CLUSTERS = 1823
+
 
 def _normalize_pair(dataset_a: str, dataset_b: str) -> Tuple[str, str]:
     return tuple(sorted((dataset_a, dataset_b)))
@@ -363,6 +365,7 @@ def load_summary_from_sum_table(sum_table_file: Path) -> Optional[Dict[str, int]
     key_map = {
         "Leafcutter success clusters": "success",
         "Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)": "sig_dpsi_01",
+        "Leafcutter sig clusters (p≤0.05 and deltapsi≥0.1)": "sig_dpsi_01",
         "Unchanged (deltapsi<0.05 or p>0.05)": "unchanged_dpsi_lt_005",
         "Not informative": "not_informative",
     }
@@ -479,7 +482,7 @@ def write_sum_table_and_stacked_bar(
 
         rows = [
             ("Leafcutter success clusters", "success"),
-            ("Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)", "sig_dpsi_01"),
+            ("Leafcutter sig clusters (p≤0.05 and deltapsi≥0.1)", "sig_dpsi_01"),
             ("Unchanged (deltapsi<0.05 or p>0.05)", "unchanged_dpsi_lt_005"),
             ("Not informative", "not_informative"),
         ]
@@ -565,7 +568,7 @@ def write_combined_stacked_bar(
             x,
             sig_dpsi_01_pct,
             bottom=bottom2,
-            label="Leafcutter sig clusters (p<=0.05, deltapsi>=0.1)",
+            label="Leafcutter sig clusters (p≤0.05 and deltapsi≥0.1)",
             color=colors["sig_dpsi_01"],
         )
 
@@ -584,7 +587,7 @@ def write_combined_stacked_bar(
         labels,
         loc="lower center",
         bbox_to_anchor=(0.5, -0.02),
-        ncol=3,
+        ncol=max(1, len(labels)),
         fontsize=9,
         frameon=False,
     )
@@ -593,6 +596,120 @@ def write_combined_stacked_bar(
     plt.tight_layout(rect=(0, 0.08, 1, 0.93))
     plot_png = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi01_HH_HM_MM.png"
     plot_svg = SHARED_JUNCTIONS_DIR / "combined_stacked_success_sig_deltapsi01_HH_HM_MM.svg"
+    fig.savefig(plot_png, dpi=200)
+    fig.savefig(plot_svg)
+    plt.close(fig)
+
+    print(f"Wrote {plot_png}")
+    print(f"Wrote {plot_svg}")
+
+
+def write_combined_stacked_bar_possible_as(
+    summaries_by_pair: Dict[Tuple[str, str], Dict[str, Dict[str, int]]],
+    possible_as_clusters: int = POSSIBLE_AS_CLUSTERS,
+) -> None:
+    """Write one 3-panel stacked bar figure where 100% equals possible AS clusters."""
+
+    if plt is None:
+        print(
+            "Skipping stacked bar plot: matplotlib is not installed in the active environment. "
+            "Install it to enable plot output."
+        )
+        return
+
+    if possible_as_clusters <= 0:
+        print("Skipping possible-AS stacked bar plot: denominator must be positive.")
+        return
+
+    panel_order = [
+        ("GSE115736", "GSE60424"),
+        ("GSE115736", "GSE116177"),
+        ("GSE116177", "GSE180020"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    colors = {
+        "not_success": "#f0f0f0",
+        "not_informative": "#deebf7",
+        "unchanged": "#9ecae1",
+        "sig_dpsi_01": "#08519c",
+    }
+
+    for panel_idx, (dataset_a, dataset_b) in enumerate(panel_order):
+        ax = axes[panel_idx]
+        pair_key = _normalize_pair(dataset_a, dataset_b)
+        summary_by_cell = summaries_by_pair.get(pair_key, {})
+
+        display_cell_types = list(summary_by_cell.keys())
+        success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
+        not_success_vals = [max(0, possible_as_clusters - s) for s in success_vals]
+        sig_dpsi_01_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
+        unchanged_vals = [summary_by_cell[ct]["unchanged_dpsi_lt_005"] for ct in display_cell_types]
+        not_informative_vals = [summary_by_cell[ct]["not_informative"] for ct in display_cell_types]
+
+        denom = float(possible_as_clusters)
+        not_success_pct = [(v / denom) * 100.0 for v in not_success_vals]
+        not_informative_pct = [(v / denom) * 100.0 for v in not_informative_vals]
+        unchanged_pct = [(v / denom) * 100.0 for v in unchanged_vals]
+        sig_dpsi_01_pct = [(v / denom) * 100.0 for v in sig_dpsi_01_vals]
+
+        bottom_not_informative = not_success_pct
+        bottom_unchanged = [a + b for a, b in zip(not_success_pct, not_informative_pct)]
+        bottom_sig = [a + b for a, b in zip(bottom_unchanged, unchanged_pct)]
+
+        x = list(range(len(display_cell_types)))
+        ax.bar(x, not_success_pct, label="Not success", color=colors["not_success"])
+        ax.bar(
+            x,
+            not_informative_pct,
+            bottom=bottom_not_informative,
+            label="Not informative",
+            color=colors["not_informative"],
+        )
+        ax.bar(
+            x,
+            unchanged_pct,
+            bottom=bottom_unchanged,
+            label="Unchanged (deltapsi<0.05 or p>0.05)",
+            color=colors["unchanged"],
+        )
+        ax.bar(
+            x,
+            sig_dpsi_01_pct,
+            bottom=bottom_sig,
+            label="Leafcutter sig clusters (p≤0.05 and deltapsi≥0.1)",
+            color=colors["sig_dpsi_01"],
+        )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(display_cell_types, rotation=25, ha="right")
+        ax.set_title(_comparison_title(dataset_a, dataset_b), pad=10)
+
+        for i, total in enumerate(success_vals):
+            ax.text(i, 102, str(int(total)), ha="center", va="bottom", fontsize=8)
+
+    for ax in axes:
+        ax.set_ylim(0, 110)
+
+    axes[0].set_ylabel(f"Percent of possible AS clusters (n={possible_as_clusters})")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=max(1, len(labels)),
+        fontsize=9,
+        frameon=False,
+    )
+    fig.suptitle(
+        f"Leafcutter cluster outcomes by comparison (possible AS clusters = {possible_as_clusters})",
+        y=0.98,
+    )
+
+    plt.tight_layout(rect=(0, 0.08, 1, 0.93))
+    plot_png = SHARED_JUNCTIONS_DIR / "combined_stacked_possibleAS1823_sig_deltapsi01_HH_HM_MM.png"
+    plot_svg = SHARED_JUNCTIONS_DIR / "combined_stacked_possibleAS1823_sig_deltapsi01_HH_HM_MM.svg"
     fig.savefig(plot_png, dpi=200)
     fig.savefig(plot_svg)
     plt.close(fig)
@@ -744,6 +861,7 @@ def main() -> None:
         summaries_by_pair[_normalize_pair(dataset_a, dataset_b)] = summary
 
     write_combined_stacked_bar(summaries_by_pair)
+    write_combined_stacked_bar_possible_as(summaries_by_pair)
 
 
 if __name__ == "__main__":
