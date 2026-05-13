@@ -527,7 +527,7 @@ def write_combined_stacked_bar(
     colors = {
         "not_informative": "#deebf7",
         "unchanged": "#9ecae1",
-        "sig_dpsi_01": "#08519c",
+        "sig_dpsi_01": "#74c476",
     }
 
     for panel_idx, (dataset_a, dataset_b) in enumerate(panel_order):
@@ -632,7 +632,7 @@ def write_combined_stacked_bar_possible_as(
         "not_success": "#f0f0f0",
         "not_informative": "#deebf7",
         "unchanged": "#9ecae1",
-        "sig_dpsi_01": "#08519c",
+        "sig_dpsi_01": "#74c476",
     }
 
     for panel_idx, (dataset_a, dataset_b) in enumerate(panel_order):

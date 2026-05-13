@@ -59,6 +59,18 @@ PLOT_A_ONLY_UPSET_UNCHANGED_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE
 THRESHOLD = 0.05
 SIG_DELTAPSI_THRESHOLD = 0.1
 UNCHANGED_DELTAPSI_THRESHOLD = 0.05
+POSSIBLE_AS_CLUSTERS = 1823
+
+STATUS_HIGH_CHANGE = "high confidance differentially spliced"
+STATUS_MEDIUM_CHANGE = "medium confidance differentially spliced"
+STATUS_LOW_CHANGE = "low confidance differentially spliced"
+STATUS_HIGH_CONSERVED = "high confidance splicing unchanged"
+STATUS_MEDIUM_CONSERVED = "medium confidance splicing unchanged"
+STATUS_LOW_CONSERVED = "low confidance splicing unchanged"
+STATUS_CHANGE = "differentially spliced"
+STATUS_CONSERVED = "splicing unchanged"
+STATUS_NOT_INFORMATIVE = "not informative"
+STATUS_NOT_SUCCESS = "not success"
 
 # canonical CT name -> (prefix_in_A, prefix_in_B, prefix_in_C)
 CELL_TYPES: dict[str, tuple[str, str, str]] = {
@@ -68,8 +80,13 @@ CELL_TYPES: dict[str, tuple[str, str, str]] = {
     "NK":   ("NK",   "NK",   "NK"),
     "Mono": ("Mono", "Mono", "Mono"),
 }
+ALL_STATUS_CELL_TYPES: dict[str, tuple[str, str | None, str | None]] = {
+    **CELL_TYPES,
+    "Neut": ("Neut", "Neut", None),
+}
 FIBROBLAST_CT = "Fibroblast"
 SUMMARY_CELL_TYPES = list(CELL_TYPES.keys()) + [FIBROBLAST_CT]
+FULL_STATUS_SHEET = "all_cluster_status"
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +103,9 @@ def cluster_min_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
     col = padj_col(prefix)
     if col not in df.columns:
         return pd.Series(dtype=float)
-    return df.groupby("cluster", dropna=False)[col].min().astype(float)
+    out = df.groupby("cluster", dropna=False)[col].min().astype(float)
+    out.index = out.index.astype(str)
+    return out
 
 
 def cluster_max_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
@@ -94,7 +113,9 @@ def cluster_max_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
     col = abs_deltapsi_col(prefix)
     if col not in df.columns:
         return pd.Series(dtype=float)
-    return df[col].astype(float).abs().groupby(df["cluster"], dropna=False).max().astype(float)
+    out = df[col].astype(float).abs().groupby(df["cluster"], dropna=False).max().astype(float)
+    out.index = out.index.astype(str)
+    return out
 
 
 def cluster_success_count_lookup(df: pd.DataFrame, prefix: str) -> int:
@@ -121,6 +142,126 @@ def classify_cluster_status(min_padj: float | None, max_abs_dpsi: float | None) 
     if (max_abs_dpsi < UNCHANGED_DELTAPSI_THRESHOLD) or (min_padj > THRESHOLD):
         return "unchanged"
     return ""
+
+
+def classify_single_dataset_bucket(
+    cluster_id: str,
+    success_clusters: set[str],
+    min_padj: pd.Series,
+    max_abs_dpsi: pd.Series,
+) -> str:
+    """Classify one cluster for one dataset into sig / unchanged / not informative / not success."""
+    if cluster_id not in success_clusters:
+        return STATUS_NOT_SUCCESS
+
+    status = classify_cluster_status(min_padj.get(cluster_id), max_abs_dpsi.get(cluster_id))
+    if status == "sig":
+        return "sig"
+    if status == "unchanged":
+        return "unchanged"
+    return STATUS_NOT_INFORMATIVE
+
+
+def classify_full_status(
+    cluster_id: str,
+    success_a: set[str],
+    min_padj_a: pd.Series,
+    max_dpsi_a: pd.Series,
+    success_b: set[str] | None = None,
+    min_padj_b: pd.Series | None = None,
+    max_dpsi_b: pd.Series | None = None,
+    success_c: set[str] | None = None,
+    min_padj_c: pd.Series | None = None,
+    max_dpsi_c: pd.Series | None = None,
+    allow_medium_without_c: bool = False,
+) -> str:
+    """Classify one cluster into the requested confidence/status labels."""
+    status_a = classify_single_dataset_bucket(cluster_id, success_a, min_padj_a, max_dpsi_a)
+    if status_a in {STATUS_NOT_SUCCESS, STATUS_NOT_INFORMATIVE}:
+        return status_a
+
+    low_conf_if_missing = STATUS_LOW_CHANGE if status_a == "sig" else STATUS_LOW_CONSERVED
+
+    if success_b is None or min_padj_b is None or max_dpsi_b is None:
+        return low_conf_if_missing
+
+    status_b = classify_single_dataset_bucket(cluster_id, success_b, min_padj_b, max_dpsi_b)
+    if status_b == STATUS_NOT_SUCCESS:
+        return low_conf_if_missing
+
+    if allow_medium_without_c:
+        if status_a == "sig":
+            return STATUS_MEDIUM_CHANGE if status_b == "unchanged" else STATUS_LOW_CHANGE
+        return STATUS_MEDIUM_CONSERVED if status_b == "unchanged" else STATUS_LOW_CONSERVED
+
+    if success_c is None or min_padj_c is None or max_dpsi_c is None:
+        return low_conf_if_missing
+
+    status_c = classify_single_dataset_bucket(cluster_id, success_c, min_padj_c, max_dpsi_c)
+    if status_c == STATUS_NOT_SUCCESS:
+        return low_conf_if_missing
+
+    if status_a == "sig":
+        return STATUS_HIGH_CHANGE if (status_b == "unchanged" and status_c == "unchanged") else STATUS_LOW_CHANGE
+    return STATUS_HIGH_CONSERVED if (status_b == "unchanged" and status_c == "unchanged") else STATUS_LOW_CONSERVED
+
+
+def classify_fibroblast_full_status(
+    cluster_id: str,
+    success_clusters: set[str],
+    min_padj: pd.Series,
+    max_dpsi: pd.Series,
+) -> str:
+    """Classify one fibroblast cluster into change / conserved / not informative / not success."""
+    status = classify_single_dataset_bucket(cluster_id, success_clusters, min_padj, max_dpsi)
+    if status == "sig":
+        return STATUS_CHANGE
+    if status == "unchanged":
+        return STATUS_CONSERVED
+    return status
+
+
+def build_full_status_sheet(
+    master_clusters: list[str],
+    cluster_genes: pd.Series,
+    all_status_metrics: dict[str, dict[str, object]],
+    fibro_metrics: dict[str, object],
+) -> pd.DataFrame:
+    """Build one row per cluster with requested status labels for every cell type."""
+    rows: list[dict[str, str]] = []
+
+    for cluster_id in master_clusters:
+        row: dict[str, str] = {
+            "cluster": cluster_id,
+            "genes": str(cluster_genes.get(cluster_id, "")),
+        }
+        for ct, metrics in all_status_metrics.items():
+            row[ct] = classify_full_status(
+                cluster_id,
+                success_a=metrics["success_a"],
+                min_padj_a=metrics["min_padj_a"],
+                max_dpsi_a=metrics["max_dpsi_a"],
+                success_b=metrics["success_b"],
+                min_padj_b=metrics["min_padj_b"],
+                max_dpsi_b=metrics["max_dpsi_b"],
+                success_c=metrics["success_c"],
+                min_padj_c=metrics["min_padj_c"],
+                max_dpsi_c=metrics["max_dpsi_c"],
+                allow_medium_without_c=bool(metrics["allow_medium_without_c"]),
+            )
+
+        row[FIBROBLAST_CT] = classify_fibroblast_full_status(
+            cluster_id,
+            success_clusters=fibro_metrics["success"],
+            min_padj=fibro_metrics["min_padj"],
+            max_dpsi=fibro_metrics["max_dpsi"],
+        )
+        rows.append(row)
+
+    return pd.DataFrame(
+        rows,
+        columns=["cluster", "genes"] + list(ALL_STATUS_CELL_TYPES.keys()) + [FIBROBLAST_CT],
+    )
 
 
 def cell_type_cols(df: pd.DataFrame, prefix: str) -> list[str]:
@@ -168,56 +309,80 @@ def sort_summary_by_status_pattern(summary_df: pd.DataFrame, ct_order: list[str]
     return sort_df.drop(columns=sort_cols).reset_index(drop=True)
 
 def plot_stacked_counts(counts_by_ct: dict[str, dict[str, int]], output_path: Path) -> None:
-    """Plot stacked cluster counts: 5 categories per cell type.
+    """Plot stacked cluster counts including not-success clusters.
 
     Categories (stacked bottom to top):
-      1. unique-sig         : sig in A, unchanged in B and C  (solid blue)
-      2. sig-not-unique     : sig in A, controls NOT all unchanged (hatched blue)
-      3. unchanged-all      : unchanged in all three (solid grey)
-      4. unchanged-not-all  : unchanged in A, controls NOT all unchanged (hatched grey)
-      5. not-informative    : neither sig nor unchanged in A (light beige)
+      1. not-success
+      2. high confidence differentially spliced
+      3. low confidence differentially spliced
+      4. high confidence splicing unchanged
+      5. low confidence splicing unchanged
+      6. not informative
+
+    The total per bar is anchored to POSSIBLE_AS_CLUSTERS.
     """
     ct_order = list(CELL_TYPES.keys())
-    v_usig  = np.array([counts_by_ct.get(ct, {}).get("unique_sig",        0) for ct in ct_order], dtype=float)
-    v_snu   = np.array([counts_by_ct.get(ct, {}).get("sig_not_unique",    0) for ct in ct_order], dtype=float)
-    v_uall  = np.array([counts_by_ct.get(ct, {}).get("unchanged_all",     0) for ct in ct_order], dtype=float)
+    success_counts = np.array(
+        [counts_by_ct.get(ct, {}).get("success_clusters", 0) for ct in ct_order],
+        dtype=float,
+    )
+    v_not_success = np.maximum(0.0, POSSIBLE_AS_CLUSTERS - success_counts)
+    v_usig = np.array([counts_by_ct.get(ct, {}).get("unique_sig", 0) for ct in ct_order], dtype=float)
+    v_snu = np.array([counts_by_ct.get(ct, {}).get("sig_not_unique", 0) for ct in ct_order], dtype=float)
+    v_uall = np.array([counts_by_ct.get(ct, {}).get("unchanged_all", 0) for ct in ct_order], dtype=float)
     v_unall = np.array([counts_by_ct.get(ct, {}).get("unchanged_not_all", 0) for ct in ct_order], dtype=float)
-    v_noinfo= np.array([counts_by_ct.get(ct, {}).get("not_informative",   0) for ct in ct_order], dtype=float)
-    totals  = (v_usig + v_snu + v_uall + v_unall + v_noinfo).astype(int)
+    v_noinfo = np.array([counts_by_ct.get(ct, {}).get("not_informative", 0) for ct in ct_order], dtype=float)
+    totals = (v_not_success + v_usig + v_snu + v_uall + v_unall + v_noinfo).astype(int)
 
-    b2 = v_usig
-    b3 = b2 + v_snu
-    b4 = b3 + v_uall
-    b5 = b4 + v_unall
+    b2 = v_not_success
+    b3 = b2 + v_usig
+    b4 = b3 + v_snu
+    b5 = b4 + v_uall
+    b6 = b5 + v_unall
 
-    sig_color  = "#1f77b4"
-    unch_color = "#bdbdbd"
-    noinfo_color = "#f5f0e8"
+    sig_color = "#74c476"
+    unch_color = "#9ecae1"
+    noinfo_color = "#deebf7"
+    not_success_color = "#f0f0f0"
+    low_conf_hatch = ".."
 
     x = np.arange(len(ct_order))
     plt.close("all")
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
-    ax.bar(x, v_usig,   color=sig_color,   label="high confidence splicing change")
-    ax.bar(x, v_snu,    bottom=b2, color=sig_color,   hatch="///", edgecolor="white",
-            label="low confidance splicing change")
-    ax.bar(x, v_uall,   bottom=b3, color=unch_color,  label="high confidence splicing conserved")
-    ax.bar(x, v_unall,  bottom=b4, color=unch_color,  hatch="///", edgecolor="white",
-            label="low confidance splicing conserved")
-    ax.bar(x, v_noinfo, bottom=b5, color=noinfo_color, edgecolor="#aaaaaa",
-           label="not informative")
+    ax.bar(x, v_not_success, color=not_success_color, label="not success")
+    ax.bar(x, v_usig, bottom=b2, color=sig_color, label="high confidence differentially spliced")
+    ax.bar(
+        x,
+        v_snu,
+        bottom=b3,
+        color=sig_color,
+        hatch=low_conf_hatch,
+        edgecolor="#4d4d4d",
+        label="low confidance differentially spliced",
+    )
+    ax.bar(x, v_uall, bottom=b4, color=unch_color, label="high confidence splicing unchanged")
+    ax.bar(
+        x,
+        v_unall,
+        bottom=b5,
+        color=unch_color,
+        hatch=low_conf_hatch,
+        edgecolor="#4d4d4d",
+        label="low confidance splicing unchanged",
+    )
+    ax.bar(x, v_noinfo, bottom=b6, color=noinfo_color, edgecolor="#7f7f7f", label="not informative")
 
     ymax = int(max(totals, default=0))
-    pad  = max(5, int(0.015 * ymax))
+    pad = max(5, int(0.015 * ymax))
     for i, total in enumerate(totals):
         ax.text(i, total + pad, str(total), ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x)
     ax.set_xticklabels(ct_order)
     ax.set_ylabel("Clusters")
-    ax.set_title("Cluster counts per cell type")
-    ax.legend(frameon=False, fontsize=7, loc="upper center",
-              bbox_to_anchor=(0.5, -0.18), ncol=2)
+    ax.set_title(f"Cluster counts per cell type (possible AS clusters = {POSSIBLE_AS_CLUSTERS})")
+    ax.legend(frameon=False, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.32)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
@@ -249,21 +414,23 @@ def plot_stacked_counts_success_pct(counts_by_ct: dict[str, dict[str, int]], out
     b4 = b3 + p_uall
     b5 = b4 + p_unall
 
-    sig_color = "#1f77b4"
-    unch_color = "#bdbdbd"
-    noinfo_color = "#f5f0e8"
+    # Keep palette aligned with combined_stacked_success_sig_deltapsi01_HH_HM_MM.
+    sig_color = "#74c476"
+    unch_color = "#9ecae1"
+    noinfo_color = "#deebf7"
+    low_conf_hatch = ".."
 
     x = np.arange(len(ct_order))
     plt.close("all")
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
-    ax.bar(x, p_usig, color=sig_color, label="high confidence splicing change")
-    ax.bar(x, p_snu, bottom=b2, color=sig_color, hatch="///", edgecolor="white",
-           label="low confidance splicing change")
-    ax.bar(x, p_uall, bottom=b3, color=unch_color, label="high confidence splicing conserved")
-    ax.bar(x, p_unall, bottom=b4, color=unch_color, hatch="///", edgecolor="white",
-           label="low confidance splicing conserved")
-    ax.bar(x, p_noinfo, bottom=b5, color=noinfo_color, edgecolor="#aaaaaa",
+    ax.bar(x, p_usig, color=sig_color, label="high confidence differentially spliced")
+    ax.bar(x, p_snu, bottom=b2, color=sig_color, hatch=low_conf_hatch, edgecolor="#4d4d4d",
+           label="low confidance differentially spliced")
+    ax.bar(x, p_uall, bottom=b3, color=unch_color, label="high confidence splicing unchanged")
+    ax.bar(x, p_unall, bottom=b4, color=unch_color, hatch=low_conf_hatch, edgecolor="#4d4d4d",
+           label="low confidance splicing unchanged")
+    ax.bar(x, p_noinfo, bottom=b5, color=noinfo_color, edgecolor="#7f7f7f",
            label="not informative")
 
     for i, total in enumerate(success_counts.astype(int)):
@@ -430,9 +597,9 @@ def plot_summary_upset(
         for y in y_map.values():
             ax_matrix.plot(idx, y, "o", color="#d9d9d9", markersize=5)
         for y in ys:
-            ax_matrix.plot(idx, y, "o", color="#08519c", markersize=6)
+            ax_matrix.plot(idx, y, "o", color="#74c476", markersize=6)
         if len(ys) >= 2:
-            ax_matrix.plot([idx, idx], [ys[0], ys[-1]], color="#08519c", linewidth=1.5)
+            ax_matrix.plot([idx, idx], [ys[0], ys[-1]], color="#74c476", linewidth=1.5)
 
     ax_matrix.set_yticks([y_map[ct] for ct in reversed(ct_order)])
     ax_matrix.set_yticklabels(list(reversed(ct_order)))
@@ -506,10 +673,35 @@ def main() -> None:
         min_padj_c[ct] = cluster_min_padj_lookup(df_c, pfx_c)
         max_dpsi_c[ct] = cluster_max_abs_deltapsi_lookup(df_c, pfx_c)
 
-    success_clusters_a: dict[str, int] = {
-        ct: cluster_success_count_lookup(df_a, pfx_a)
+    success_clusters_a_set: dict[str, set[str]] = {
+        ct: cluster_success_clusters(df_a, pfx_a)
         for ct, (pfx_a, _, _) in CELL_TYPES.items()
     }
+    success_clusters_a: dict[str, int] = {ct: len(clusters) for ct, clusters in success_clusters_a_set.items()}
+    success_clusters_b_set: dict[str, set[str]] = {
+        ct: cluster_success_clusters(df_b, pfx_b)
+        for ct, (_, pfx_b, _) in CELL_TYPES.items()
+    }
+    success_clusters_c_set: dict[str, set[str]] = {
+        ct: cluster_success_clusters(df_c, pfx_c)
+        for ct, (_, _, pfx_c) in CELL_TYPES.items()
+    }
+
+    all_status_metrics: dict[str, dict[str, object]] = {}
+    for ct, (pfx_a, pfx_b, pfx_c) in ALL_STATUS_CELL_TYPES.items():
+        all_status_metrics[ct] = {
+            "success_a": cluster_success_clusters(df_a, pfx_a),
+            "min_padj_a": cluster_min_padj_lookup(df_a, pfx_a),
+            "max_dpsi_a": cluster_max_abs_deltapsi_lookup(df_a, pfx_a),
+            "success_b": cluster_success_clusters(df_b, pfx_b) if pfx_b else None,
+            "min_padj_b": cluster_min_padj_lookup(df_b, pfx_b) if pfx_b else None,
+            "max_dpsi_b": cluster_max_abs_deltapsi_lookup(df_b, pfx_b) if pfx_b else None,
+            "success_c": cluster_success_clusters(df_c, pfx_c) if pfx_c else None,
+            "min_padj_c": cluster_min_padj_lookup(df_c, pfx_c) if pfx_c else None,
+            "max_dpsi_c": cluster_max_abs_deltapsi_lookup(df_c, pfx_c) if pfx_c else None,
+            "allow_medium_without_c": pfx_c is None,
+        }
+
     fibro_success_clusters = cluster_success_clusters(df_fibro, FIBROBLAST_CT)
     fibro_min_padj = cluster_min_padj_lookup(df_fibro, FIBROBLAST_CT)
     fibro_max_dpsi = cluster_max_abs_deltapsi_lookup(df_fibro, FIBROBLAST_CT)
@@ -519,6 +711,25 @@ def main() -> None:
             fibro_min_padj.get(cl),
             fibro_max_dpsi.get(cl),
         )
+
+    fibro_metrics: dict[str, object] = {
+        "success": fibro_success_clusters,
+        "min_padj": fibro_min_padj,
+        "max_dpsi": fibro_max_dpsi,
+    }
+
+    cluster_genes_a = (
+        df_a.drop_duplicates(subset="cluster")[["cluster", "genes"]]
+        .assign(cluster=lambda data: data["cluster"].astype(str))
+        .set_index("cluster")["genes"]
+    )
+    cluster_genes_fibro = (
+        df_fibro.drop_duplicates(subset="cluster")[["cluster", "genes"]]
+        .assign(cluster=lambda data: data["cluster"].astype(str))
+        .set_index("cluster")["genes"]
+    )
+    cluster_genes = cluster_genes_a.combine_first(cluster_genes_fibro)
+    master_clusters = df_a["cluster"].astype(str).drop_duplicates().tolist()
 
     # Ordered list of clusters seen across all cell-type sheets (deduplicated)
     seen_clusters: dict[str, None] = {}  # ordered set via dict
@@ -542,24 +753,34 @@ def main() -> None:
                 )
                 continue
 
-            clusters_with_all = (
-                set(min_padj_a[ct].index)
-                & set(max_dpsi_a[ct].index)
-                & set(min_padj_b[ct].index)
-                & set(max_dpsi_b[ct].index)
-                & set(min_padj_c[ct].index)
-                & set(max_dpsi_c[ct].index)
-            )
+            # Evaluate all A-success clusters; low confidence includes B/C not success,
+            # not informative, or splicing change.
+            clusters_to_evaluate = success_clusters_a_set.get(ct, set())
 
             unique_sig_clusters: set[str] = set()
             sig_not_unique_clusters: set[str] = set()
             unchanged_all_clusters: set[str] = set()
             unchanged_not_all_clusters: set[str] = set()
             not_informative_clusters: set[str] = set()
-            for cl in clusters_with_all:
-                status_a = classify_cluster_status(min_padj_a[ct].get(cl), max_dpsi_a[ct].get(cl))
-                status_b = classify_cluster_status(min_padj_b[ct].get(cl), max_dpsi_b[ct].get(cl))
-                status_c = classify_cluster_status(min_padj_c[ct].get(cl), max_dpsi_c[ct].get(cl))
+            for cl in clusters_to_evaluate:
+                status_a = classify_single_dataset_bucket(
+                    cl,
+                    success_clusters_a_set.get(ct, set()),
+                    min_padj_a[ct],
+                    max_dpsi_a[ct],
+                )
+                status_b = classify_single_dataset_bucket(
+                    cl,
+                    success_clusters_b_set.get(ct, set()),
+                    min_padj_b[ct],
+                    max_dpsi_b[ct],
+                )
+                status_c = classify_single_dataset_bucket(
+                    cl,
+                    success_clusters_c_set.get(ct, set()),
+                    min_padj_c[ct],
+                    max_dpsi_c[ct],
+                )
 
                 if (status_a == "sig") and (status_b == "unchanged") and (status_c == "unchanged"):
                     unique_sig_clusters.add(str(cl))
@@ -660,19 +881,21 @@ def main() -> None:
             seen_clusters[cl] = None
 
         # ------------------------------------------------------------------ #
+        # Full-status sheet                                                   #
+        # ------------------------------------------------------------------ #
+        full_status_df = build_full_status_sheet(
+            master_clusters=master_clusters,
+            cluster_genes=cluster_genes,
+            all_status_metrics=all_status_metrics,
+            fibro_metrics=fibro_metrics,
+        )
+        full_status_df.to_excel(writer, sheet_name=FULL_STATUS_SHEET, index=False)
+        print(f"  {FULL_STATUS_SHEET}: {len(full_status_df):,} rows")
+
+        # ------------------------------------------------------------------ #
         # Summary sheet                                                        #
         # ------------------------------------------------------------------ #
         print(f"\nBuilding summary sheet for {len(seen_clusters):,} unique clusters …")
-
-        cluster_genes_a = (
-            df_a.drop_duplicates(subset="cluster")[["cluster", "genes"]]
-            .set_index("cluster")["genes"]
-        )
-        cluster_genes_fibro = (
-            df_fibro.drop_duplicates(subset="cluster")[["cluster", "genes"]]
-            .set_index("cluster")["genes"]
-        )
-        cluster_genes = cluster_genes_a.combine_first(cluster_genes_fibro)
 
         rows = []
         for cl in seen_clusters:
