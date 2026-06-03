@@ -19,6 +19,7 @@ from pathlib import Path
 import json
 import multiprocessing as mp
 import re
+import math
 
 import pandas as pd
 
@@ -31,7 +32,7 @@ ENRICHMENT_FILE_SUFFIX = "_GO_BP_enrichment.tsv"
 
 THRESHOLD = 0.05
 ENRICHR_TIMEOUT_SEC = 180
-GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025", "GO_Biological_Process_2023")
+GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025",)
 
 REQUESTED_CELL_TYPES: tuple[str, ...] = (
     "CD4T",
@@ -146,8 +147,21 @@ def _go_worker(
             if req_cols.issubset(set(results.columns)):
                 results["Enrichment Ratio"] = pd.to_numeric(results["Odds Ratio"], errors="coerce")
 
-            results.to_csv(out_tsv, sep="\t", index=False)
-            queue.put({"status": "ok", "rows": int(len(results))})
+            # Remove terms with infinite ratio values; these come from zero denominators
+            # in odds-ratio calculations and are not informative for ranking.
+            drop_mask = pd.Series(False, index=results.index)
+            for ratio_col in ("Odds Ratio", "Enrichment Ratio", "odds_ratio", "enrichment_ratio"):
+                if ratio_col in results.columns:
+                    vals = pd.to_numeric(results[ratio_col], errors="coerce")
+                    drop_mask = drop_mask | (~vals.isna() & ~vals.map(math.isfinite))
+            if drop_mask.any():
+                results = results.loc[~drop_mask].copy()
+
+            if results.empty:
+                queue.put({"status": "empty"})
+            else:
+                results.to_csv(out_tsv, sep="\t", index=False)
+                queue.put({"status": "ok", "rows": int(len(results))})
         else:
             queue.put({"status": "empty"})
     except Exception as exc:
@@ -282,6 +296,9 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
             enr_use = enr_col
 
         for _, row in tmp.iterrows():
+            enr_val = row[enr_use]
+            if pd.notna(enr_val) and isinstance(enr_val, (int, float)) and not math.isfinite(float(enr_val)):
+                continue
             out_rows.append(
                 {
                     "library": meta["library"],
@@ -289,7 +306,7 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
                     "type_of_list": meta["type_of_list"],
                     "go_term": row[term_col],
                     "p_value": row[pval_col],
-                    "enrichment_ratio": row[enr_use],
+                    "enrichment_ratio": enr_val,
                     "fdr": row[fdr_col],
                 }
             )
