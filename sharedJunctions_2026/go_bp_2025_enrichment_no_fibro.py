@@ -430,50 +430,23 @@ def main() -> None:
     sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.tsv", sep="\t", index=False)
     sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.csv", index=False)
 
+    all_terms_txt = OUT_DIR / "go_bp_2023_2025_all_terms_table.txt"
+    significant_terms_txt = OUT_DIR / "go_bp_2023_2025_significant_terms_table.txt"
+    significant_counts_txt = OUT_DIR / "significant_counts_by_library.txt"
+
     print("Done. Results written to:")
     print(f"  {OUT_DIR}")
     print("Final all-terms GO table:")
     print(f"  {final_all_tsv}")
     print("Final significant GO table:")
     print(f"  {final_sig_tsv}")
-    print("\n=== ALL GO TERMS (2023 + 2025) ===")
-    with pd.option_context(
-        "display.max_rows",
-        None,
-        "display.max_columns",
-        None,
-        "display.width",
-        0,
-        "display.max_colwidth",
-        None,
-    ):
-        print(final_all_table.to_string(index=False))
-
-    print("\n=== SIGNIFICANT GO TERMS (FDR <= 0.05) ===")
-    with pd.option_context(
-        "display.max_rows",
-        None,
-        "display.max_columns",
-        None,
-        "display.width",
-        0,
-        "display.max_colwidth",
-        None,
-    ):
-        print(final_sig_table.to_string(index=False))
-
-    print("\n=== SIGNIFICANT TERM COUNTS BY LIBRARY/CELL TYPE/LIST ===")
-    with pd.option_context(
-        "display.max_rows",
-        None,
-        "display.max_columns",
-        None,
-        "display.width",
-        0,
-        "display.max_colwidth",
-        None,
-    ):
-        print(sig_counts.to_string(index=False))
+    all_terms_txt.write_text(final_all_table.to_string(index=False) + "\n")
+    significant_terms_txt.write_text(final_sig_table.to_string(index=False) + "\n")
+    significant_counts_txt.write_text(sig_counts.to_string(index=False) + "\n")
+    print("Saved full table-style outputs:")
+    print(f"  {all_terms_txt}")
+    print(f"  {significant_terms_txt}")
+    print(f"  {significant_counts_txt}")
 
 
 if __name__ == "__main__":
