@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-GO Biological Process 2025 enrichment for no-fibroblast cell types.
+GO Biological Process 2025 enrichment across all requested cell types.
 
-Builds 4 gene lists from cluster-level status across 3 comparisons:
-  1) sig_in_any_hm_cell
-  2) unchanged_in_any_hm_cell
-  3) sig_hm_and_unchanged_hh_mm
-  4) unchanged_in_all_three
+Uses a single workbook:
+    unique_sig_clusters_HN6.xlsx (sheet: all_cluster_status)
 
-Background genes:
-  genes from clusters that are successful in at least one HM cell type
-  (success = cluster has at least one numeric p.adjust in HM for that cell type).
+For each cell type, gene lists are built from status labels:
+    - splicing unchanged
+    - differentially spliced
 
-Fibroblast data are intentionally excluded.
+Background genes are taken from all rows of column B (genes) in
+all_cluster_status.
 """
 
 from __future__ import annotations
@@ -26,73 +24,66 @@ import pandas as pd
 
 
 BASE = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026")
-FILE_HM = BASE / "leafcutter_GSE115736_GSE116177" / "clusters_sum_table_HN6.txt"
-FILE_HH = BASE / "leafcutter_GSE115736_GSE60424" / "clusters_sum_table_HN6.txt"
-FILE_MM = BASE / "leafcutter_GSE116177_GSE180020" / "clusters_sum_table_HN6.txt"
-OUT_DIR = BASE / "go_bp_2025_no_fibro_results"
+FILE_XLSX = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6.xlsx"
+SHEET_ALL_CLUSTER_STATUS = "all_cluster_status"
+OUT_DIR = BASE / "go_bp_2025_with_fibro_neu_results"
+ENRICHMENT_FILE_SUFFIX = "_GO_BP_enrichment.tsv"
 
 THRESHOLD = 0.05
-SIG_DELTAPSI_THRESHOLD = 0.1
-UNCHANGED_DELTAPSI_THRESHOLD = 0.05
 ENRICHR_TIMEOUT_SEC = 180
+GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025", "GO_Biological_Process_2023")
 
-# canonical CT name -> (prefix_in_HM, prefix_in_HH, prefix_in_MM)
-CELL_TYPES: dict[str, tuple[str, str, str]] = {
-    "CD4T": ("CD4T", "CD4T", "CD4T"),
-    "CD8T": ("CD8T", "CD8T", "Cd8T"),
-    "NveB": ("NveB", "NveB", "BCell"),
-    "NK": ("NK", "NK", "NK"),
-    "Mono": ("Mono", "Mono", "Mono"),
+REQUESTED_CELL_TYPES: tuple[str, ...] = (
+    "CD4T",
+    "CD8T",
+    "NveB",
+    "NK",
+    "Mono",
+    "Fibroblast",
+    "Neu",
+)
+
+CELL_TYPE_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "CD4T": ("CD4T",),
+    "CD8T": ("CD8T",),
+    "NveB": ("NveB", "BCell"),
+    "NK": ("NK",),
+    "Mono": ("Mono",),
+    "Fibroblast": ("Fibroblast", "Fibroblasts", "fibroblast", "fibroblasts"),
+    "Neu": ("Neu", "Neut", "Neutrophils"),
+}
+
+CELL_TYPE_DISPLAY: dict[str, str] = {
+    "CD4T": "CD4T",
+    "CD8T": "CD8T",
+    "NveB": "NaveB",
+    "NK": "NK",
+    "Mono": "Mono",
+    "Fibroblast": "Fibroblast",
+    "Neu": "Neu",
 }
 
 
-def padj_col(prefix: str) -> str:
-    return f"{prefix}_p.adjust"
+def resolve_cell_type_columns(df: pd.DataFrame) -> list[tuple[str, str]]:
+    """Map requested cell type labels to actual column names present in the sheet."""
+    resolved: list[tuple[str, str]] = []
+    missing: list[str] = []
 
+    for ct in REQUESTED_CELL_TYPES:
+        candidates = CELL_TYPE_CANDIDATES.get(ct, (ct,))
+        actual = next((col for col in candidates if col in df.columns), None)
+        if actual is None:
+            missing.append(f"{ct} (tried: {', '.join(candidates)})")
+            continue
+        resolved.append((ct, actual))
 
-def abs_deltapsi_col(prefix: str) -> str:
-    return f"{prefix}_abs_deltapsi"
+    if missing:
+        raise ValueError(
+            f"Missing expected cell type columns in sheet '{SHEET_ALL_CLUSTER_STATUS}': "
+            f"{'; '.join(missing)}"
+        )
 
-
-def cluster_min_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
-    col = padj_col(prefix)
-    if col not in df.columns:
-        return pd.Series(dtype=float)
-    return (
-        pd.to_numeric(df[col], errors="coerce")
-        .groupby(df["cluster"], dropna=False)
-        .min()
-        .astype(float)
-    )
-
-
-def cluster_max_abs_deltapsi_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
-    col = abs_deltapsi_col(prefix)
-    if col not in df.columns:
-        return pd.Series(dtype=float)
-    vals = pd.to_numeric(df[col], errors="coerce").abs()
-    return vals.groupby(df["cluster"], dropna=False).max().astype(float)
-
-
-def cluster_success_clusters(df: pd.DataFrame, prefix: str) -> set[str]:
-    col = padj_col(prefix)
-    if col not in df.columns:
-        return set()
-    vals = pd.to_numeric(df[col], errors="coerce")
-    has_value = vals.groupby(df["cluster"], dropna=False).apply(lambda s: s.notna().any())
-    return set(has_value[has_value].index.astype(str))
-
-
-def classify_cluster_status(min_padj: float | None, max_abs_dpsi: float | None) -> str:
-    if min_padj is None or max_abs_dpsi is None:
-        return ""
-    if pd.isna(min_padj) or pd.isna(max_abs_dpsi):
-        return ""
-    if (min_padj <= THRESHOLD) and (max_abs_dpsi >= SIG_DELTAPSI_THRESHOLD):
-        return "sig"
-    if (max_abs_dpsi < UNCHANGED_DELTAPSI_THRESHOLD) or (min_padj > THRESHOLD):
-        return "unchanged"
-    return ""
+    return resolved
 
 
 def split_genes(genes_text: str) -> list[str]:
@@ -108,21 +99,27 @@ def split_genes(genes_text: str) -> list[str]:
     return genes
 
 
-def clusters_to_gene_set(clusters: set[str], cluster_to_genes: pd.Series) -> set[str]:
+def genes_series_to_set(genes_series: pd.Series) -> set[str]:
     out: set[str] = set()
-    for cl in clusters:
-        for gene in split_genes(cluster_to_genes.get(cl, "")):
+    for genes_text in genes_series:
+        for gene in split_genes(genes_text):
             out.add(gene)
     return out
+
+
+def _status_mask(status_series: pd.Series, keyword: str) -> pd.Series:
+    s = status_series.fillna("").astype(str).str.strip().str.lower()
+    return s.str.contains(keyword, regex=False)
 
 
 def write_gene_list(path: Path, genes: set[str]) -> None:
     path.write_text("\n".join(sorted(genes)) + ("\n" if genes else ""))
 
 
-def _enrichr_worker(
+def _go_worker(
     genes: list[str],
     background: list[str],
+    library: str,
     run_dir: str,
     out_tsv: str,
     queue: mp.Queue,
@@ -132,16 +129,23 @@ def _enrichr_worker(
 
         enr = gp.enrichr(
             gene_list=genes,
-            gene_sets="GO_Biological_Process_2025",
-            organism="Human",
+            gene_sets=library,
+            organism="human",
+            outdir=None,
             background=background,
-            outdir=run_dir,
-            no_plot=True,
             cutoff=1.0,
+            no_plot=True,
         )
 
-        results = getattr(enr, "results", pd.DataFrame())
+        results = getattr(enr, "results", None)
+        if not isinstance(results, pd.DataFrame):
+            results = pd.DataFrame() if results is None else pd.DataFrame(results)
+
         if isinstance(results, pd.DataFrame) and not results.empty:
+            req_cols = {"Overlap", "Odds Ratio"}
+            if req_cols.issubset(set(results.columns)):
+                results["Enrichment Ratio"] = pd.to_numeric(results["Odds Ratio"], errors="coerce")
+
             results.to_csv(out_tsv, sep="\t", index=False)
             queue.put({"status": "ok", "rows": int(len(results))})
         else:
@@ -150,9 +154,19 @@ def _enrichr_worker(
         queue.put({"status": "error", "message": str(exc)})
 
 
-def run_enrichr_with_background(label: str, genes: set[str], background: set[str], out_dir: Path) -> None:
+def run_go_with_background(label: str, genes: set[str], background: set[str], library: str, out_dir: Path) -> None:
     run_dir = out_dir / label
     run_dir.mkdir(parents=True, exist_ok=True)
+    for stale_name in (
+        "ERROR_missing_gseapy.txt",
+        "ERROR_go_request_failed.txt",
+        "ERROR_go_timeout.txt",
+        "NO_ENRICHMENT_RESULTS.txt",
+        "EMPTY_GENE_LIST.txt",
+    ):
+        stale_path = run_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     if not genes:
         (run_dir / "EMPTY_GENE_LIST.txt").write_text("No genes in this list.\n")
@@ -168,10 +182,10 @@ def run_enrichr_with_background(label: str, genes: set[str], background: set[str
         return
 
     queue: mp.Queue = mp.Queue()
-    out_tsv = out_dir / f"{label}_GO_Biological_Process_2025.tsv"
+    out_tsv = out_dir / f"{label}{ENRICHMENT_FILE_SUFFIX}"
     proc = mp.Process(
-        target=_enrichr_worker,
-        args=(sorted(genes), sorted(background), str(run_dir), str(out_tsv), queue),
+        target=_go_worker,
+        args=(sorted(genes), sorted(background), library, str(run_dir), str(out_tsv), queue),
         daemon=True,
     )
     proc.start()
@@ -180,15 +194,15 @@ def run_enrichr_with_background(label: str, genes: set[str], background: set[str
     if proc.is_alive():
         proc.terminate()
         proc.join()
-        (run_dir / "ERROR_enrichr_timeout.txt").write_text(
-            "Enrichr request timed out and was terminated.\n"
+        (run_dir / "ERROR_go_timeout.txt").write_text(
+            "GO request timed out and was terminated.\n"
             f"Timeout: {ENRICHR_TIMEOUT_SEC} seconds\n"
         )
         return
 
     if queue.empty():
-        (run_dir / "ERROR_enrichr_request_failed.txt").write_text(
-            "Enrichr process exited without returning a result.\n"
+        (run_dir / "ERROR_go_request_failed.txt").write_text(
+            "GO process exited without returning a result.\n"
         )
         return
 
@@ -199,98 +213,267 @@ def run_enrichr_with_background(label: str, genes: set[str], background: set[str
     if status == "empty":
         (run_dir / "NO_ENRICHMENT_RESULTS.txt").write_text("No terms returned by Enrichr.\n")
     else:
-        (run_dir / "ERROR_enrichr_request_failed.txt").write_text(
-            "Enrichr request failed (likely no network access to maayanlab.cloud).\n"
+        (run_dir / "ERROR_go_request_failed.txt").write_text(
+            "GO request failed (likely no network access to Enrichr).\n"
             f"Error: {result.get('message', 'Unknown error')}\n"
         )
 
 
+def _first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_only: bool) -> pd.DataFrame:
+    out_rows: list[dict[str, object]] = []
+    for meta in rows_meta:
+        tsv_path = out_dir / f"{meta['label']}{ENRICHMENT_FILE_SUFFIX}"
+        if not tsv_path.exists():
+            continue
+
+        try:
+            df = pd.read_csv(tsv_path, sep="\t")
+        except Exception:
+            continue
+        if df.empty:
+            continue
+
+        term_col = _first_existing_col(df, ["Term", "term", "name"])
+        pval_col = _first_existing_col(df, ["P-value", "P value", "p_value", "pval", "PValue"])
+        fdr_col = _first_existing_col(df, ["Adjusted P-value", "Adjusted P value", "adj_p", "FDR", "fdr", "p_value"])
+        enr_col = _first_existing_col(df, ["Odds Ratio", "Odds_Ratio", "odds_ratio", "Enrichment Ratio", "enrichment_ratio"])
+
+        if term_col is None:
+            continue
+
+        use_cols = [term_col]
+        if pval_col:
+            use_cols.append(pval_col)
+        if fdr_col:
+            use_cols.append(fdr_col)
+        if enr_col:
+            use_cols.append(enr_col)
+
+        tmp = df[use_cols].copy()
+        if pval_col:
+            tmp[pval_col] = pd.to_numeric(tmp[pval_col], errors="coerce")
+        else:
+            tmp["_pvalue"] = pd.NA
+            pval_col = "_pvalue"
+
+        if fdr_col:
+            tmp[fdr_col] = pd.to_numeric(tmp[fdr_col], errors="coerce")
+        else:
+            tmp["_fdr"] = pd.NA
+            fdr_col = "_fdr"
+
+        if significant_only:
+            tmp = tmp[tmp[fdr_col] <= THRESHOLD]
+        if tmp.empty:
+            continue
+
+        if enr_col is None:
+            tmp["_enrichment_ratio"] = pd.NA
+            enr_use = "_enrichment_ratio"
+        else:
+            tmp[enr_col] = pd.to_numeric(tmp[enr_col], errors="coerce")
+            enr_use = enr_col
+
+        for _, row in tmp.iterrows():
+            out_rows.append(
+                {
+                    "library": meta["library"],
+                    "cell_type": meta["cell_type"],
+                    "type_of_list": meta["type_of_list"],
+                    "go_term": row[term_col],
+                    "p_value": row[pval_col],
+                    "enrichment_ratio": row[enr_use],
+                    "fdr": row[fdr_col],
+                }
+            )
+
+    if not out_rows:
+        return pd.DataFrame(columns=["library", "cell_type", "type_of_list", "go_term", "p_value", "enrichment_ratio", "fdr"])
+
+    out_df = pd.DataFrame(out_rows)
+    out_df = out_df.sort_values(["library", "cell_type", "type_of_list", "fdr", "p_value", "go_term"], kind="stable").reset_index(drop=True)
+    return out_df
+
+
+def _collect_run_errors(rows_meta: list[dict[str, str]], out_dir: Path) -> list[str]:
+    errors: list[str] = []
+    for meta in rows_meta:
+        run_dir = out_dir / meta["label"]
+        for err_name in ("ERROR_missing_gseapy.txt", "ERROR_go_request_failed.txt", "ERROR_go_timeout.txt"):
+            err_path = run_dir / err_name
+            if err_path.exists():
+                try:
+                    msg = err_path.read_text().strip().replace("\n", " | ")
+                except Exception:
+                    msg = "(could not read error file)"
+                errors.append(f"{meta['label']}: {msg}")
+                break
+    return errors
+
+
 def main() -> None:
-    for p in (FILE_HM, FILE_HH, FILE_MM):
-        if not p.exists():
-            raise FileNotFoundError(f"Missing input file: {p}")
+    if not FILE_XLSX.exists():
+        raise FileNotFoundError(f"Missing input file: {FILE_XLSX}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    df_hm = pd.read_csv(FILE_HM, sep="\t")
-    df_hh = pd.read_csv(FILE_HH, sep="\t")
-    df_mm = pd.read_csv(FILE_MM, sep="\t")
+    df_status = pd.read_excel(FILE_XLSX, sheet_name=SHEET_ALL_CLUSTER_STATUS)
 
-    cluster_to_genes = (
-        df_hm.drop_duplicates(subset="cluster")[["cluster", "genes"]]
-        .assign(cluster=lambda x: x["cluster"].astype(str))
-        .set_index("cluster")["genes"]
-    )
-
-    sig_any_hm_clusters: set[str] = set()
-    unchanged_any_hm_clusters: set[str] = set()
-    sig_hm_unch_hh_mm_clusters: set[str] = set()
-    unchanged_all_three_clusters: set[str] = set()
-    background_success_clusters: set[str] = set()
-
-    for ct, (pfx_hm, pfx_hh, pfx_mm) in CELL_TYPES.items():
-        hm_min = cluster_min_padj_lookup(df_hm, pfx_hm)
-        hm_max = cluster_max_abs_deltapsi_lookup(df_hm, pfx_hm)
-        hh_min = cluster_min_padj_lookup(df_hh, pfx_hh)
-        hh_max = cluster_max_abs_deltapsi_lookup(df_hh, pfx_hh)
-        mm_min = cluster_min_padj_lookup(df_mm, pfx_mm)
-        mm_max = cluster_max_abs_deltapsi_lookup(df_mm, pfx_mm)
-
-        background_success_clusters |= cluster_success_clusters(df_hm, pfx_hm)
-
-        clusters_with_all = (
-            set(hm_min.index.astype(str))
-            & set(hm_max.index.astype(str))
-            & set(hh_min.index.astype(str))
-            & set(hh_max.index.astype(str))
-            & set(mm_min.index.astype(str))
-            & set(mm_max.index.astype(str))
+    if df_status.shape[1] < 2:
+        raise ValueError(
+            f"Sheet '{SHEET_ALL_CLUSTER_STATUS}' must include at least 2 columns; "
+            "column B should contain genes."
         )
 
-        for cl in clusters_with_all:
-            s_hm = classify_cluster_status(hm_min.get(cl), hm_max.get(cl))
-            s_hh = classify_cluster_status(hh_min.get(cl), hh_max.get(cl))
-            s_mm = classify_cluster_status(mm_min.get(cl), mm_max.get(cl))
+    genes_col = df_status.columns[1]
+    cell_type_columns = resolve_cell_type_columns(df_status)
 
-            if s_hm == "sig":
-                sig_any_hm_clusters.add(cl)
-            if s_hm == "unchanged":
-                unchanged_any_hm_clusters.add(cl)
-            if (s_hm == "sig") and (s_hh == "unchanged") and (s_mm == "unchanged"):
-                sig_hm_unch_hh_mm_clusters.add(cl)
-            if (s_hm == "unchanged") and (s_hh == "unchanged") and (s_mm == "unchanged"):
-                unchanged_all_three_clusters.add(cl)
+    background_genes = genes_series_to_set(df_status[genes_col])
+    all_diff_genes: set[str] = set()
+    all_unchanged_genes: set[str] = set()
 
-    background_genes = clusters_to_gene_set(background_success_clusters, cluster_to_genes)
+    rows_meta: list[dict[str, str]] = []
+    summary: dict[str, object] = {}
 
-    gene_sets: dict[str, set[str]] = {
-        "sig_in_any_hm_cell": clusters_to_gene_set(sig_any_hm_clusters, cluster_to_genes),
-        "unchanged_in_any_hm_cell": clusters_to_gene_set(unchanged_any_hm_clusters, cluster_to_genes),
-        "sig_hm_and_unchanged_hh_mm": clusters_to_gene_set(sig_hm_unch_hh_mm_clusters, cluster_to_genes),
-        "unchanged_in_all_three": clusters_to_gene_set(unchanged_all_three_clusters, cluster_to_genes),
-    }
+    for ct, status_col in cell_type_columns:
+        unchanged_mask = _status_mask(df_status[status_col], "splicing unchanged")
+        diff_mask = _status_mask(df_status[status_col], "differentially spliced")
 
-    write_gene_list(OUT_DIR / "background_success_genes.txt", background_genes)
-    for label, genes in gene_sets.items():
-        write_gene_list(OUT_DIR / f"{label}.txt", genes)
+        unchanged_genes = genes_series_to_set(df_status.loc[unchanged_mask, genes_col])
+        diff_genes = genes_series_to_set(df_status.loc[diff_mask, genes_col])
+        all_diff_genes.update(diff_genes)
+        all_unchanged_genes.update(unchanged_genes)
 
-    summary = {
-        "background_success_clusters": len(background_success_clusters),
-        "background_success_genes": len(background_genes),
-    }
-    for label, genes in gene_sets.items():
-        summary[f"{label}_genes"] = len(genes)
+        ct_dir = OUT_DIR / ct
+        ct_dir.mkdir(parents=True, exist_ok=True)
+        write_gene_list(ct_dir / "background_genes_all_cluster_status_colB.txt", background_genes)
+        write_gene_list(ct_dir / "differentially_spliced.txt", diff_genes)
+        write_gene_list(ct_dir / "splicing_unchanged.txt", unchanged_genes)
+
+        for library in GO_LIBRARIES:
+            label_diff = f"{ct}_differentially_spliced_{library}"
+            label_unchanged = f"{ct}_splicing_unchanged_{library}"
+
+            print(f"[{ct}] Running {library} enrichment for differentially spliced", flush=True)
+            run_go_with_background(label_diff, diff_genes, background_genes, library, OUT_DIR)
+            print(f"[{ct}] Running {library} enrichment for splicing unchanged", flush=True)
+            run_go_with_background(label_unchanged, unchanged_genes, background_genes, library, OUT_DIR)
+
+            rows_meta.append(
+                {
+                    "label": label_diff,
+                    "library": library,
+                    "cell_type": CELL_TYPE_DISPLAY.get(ct, ct),
+                    "type_of_list": "differentially spliced",
+                }
+            )
+            rows_meta.append(
+                {
+                    "label": label_unchanged,
+                    "library": library,
+                    "cell_type": CELL_TYPE_DISPLAY.get(ct, ct),
+                    "type_of_list": "splicing unchanged",
+                }
+            )
+
+        summary[ct] = {
+            "background_genes_all_cluster_status_colB": len(background_genes),
+            "differentially_spliced_clusters": int(diff_mask.sum()),
+            "differentially_spliced_genes": len(diff_genes),
+            "splicing_unchanged_clusters": int(unchanged_mask.sum()),
+            "splicing_unchanged_genes": len(unchanged_genes),
+        }
 
     (OUT_DIR / "summary_counts.json").write_text(json.dumps(summary, indent=2) + "\n")
+    write_gene_list(OUT_DIR / "all_differentially_spliced_genes.txt", all_diff_genes)
+    write_gene_list(OUT_DIR / "all_splicing_unchanged_genes.txt", all_unchanged_genes)
 
-    total_sets = len(gene_sets)
-    for idx, (label, genes) in enumerate(gene_sets.items(), start=1):
-        print(f"[{idx}/{total_sets}] Running Enrichr for: {label}", flush=True)
-        run_enrichr_with_background(label, genes, background_genes, OUT_DIR)
-        print(f"[{idx}/{total_sets}] Finished: {label}", flush=True)
+    final_all_table = build_go_table(rows_meta, OUT_DIR, significant_only=False)
+    if final_all_table.empty:
+        run_errors = _collect_run_errors(rows_meta, OUT_DIR)
+        preview = "\n".join(run_errors[:8]) if run_errors else "No per-run error files found."
+        raise RuntimeError(
+            "No enrichment terms were collected for any cell type/library. "
+            "Check dependency/network errors in run directories.\n"
+            f"Error preview:\n{preview}"
+        )
+
+    final_all_tsv = OUT_DIR / "go_bp_2023_2025_all_terms_table.tsv"
+    final_all_csv = OUT_DIR / "go_bp_2023_2025_all_terms_table.csv"
+    final_all_table.to_csv(final_all_tsv, sep="\t", index=False)
+    final_all_table.to_csv(final_all_csv, index=False)
+
+    final_sig_table = build_go_table(rows_meta, OUT_DIR, significant_only=True)
+    final_sig_tsv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.tsv"
+    final_sig_csv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.csv"
+    final_sig_table.to_csv(final_sig_tsv, sep="\t", index=False)
+    final_sig_table.to_csv(final_sig_csv, index=False)
+
+    if not final_sig_table.empty:
+        sig_counts = (
+            final_sig_table.groupby(["library", "cell_type", "type_of_list"], as_index=False)
+            .size()
+            .rename(columns={"size": "n_significant_terms_fdr_le_0_05"})
+            .sort_values(["library", "cell_type", "type_of_list"], kind="stable")
+        )
+    else:
+        sig_counts = pd.DataFrame(
+            columns=["library", "cell_type", "type_of_list", "n_significant_terms_fdr_le_0_05"]
+        )
+    sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.tsv", sep="\t", index=False)
+    sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.csv", index=False)
 
     print("Done. Results written to:")
     print(f"  {OUT_DIR}")
+    print("Final all-terms GO table:")
+    print(f"  {final_all_tsv}")
+    print("Final significant GO table:")
+    print(f"  {final_sig_tsv}")
+    print("\n=== ALL GO TERMS (2023 + 2025) ===")
+    with pd.option_context(
+        "display.max_rows",
+        None,
+        "display.max_columns",
+        None,
+        "display.width",
+        0,
+        "display.max_colwidth",
+        None,
+    ):
+        print(final_all_table.to_string(index=False))
+
+    print("\n=== SIGNIFICANT GO TERMS (FDR <= 0.05) ===")
+    with pd.option_context(
+        "display.max_rows",
+        None,
+        "display.max_columns",
+        None,
+        "display.width",
+        0,
+        "display.max_colwidth",
+        None,
+    ):
+        print(final_sig_table.to_string(index=False))
+
+    print("\n=== SIGNIFICANT TERM COUNTS BY LIBRARY/CELL TYPE/LIST ===")
+    with pd.option_context(
+        "display.max_rows",
+        None,
+        "display.max_columns",
+        None,
+        "display.width",
+        0,
+        "display.max_colwidth",
+        None,
+    ):
+        print(sig_counts.to_string(index=False))
 
 
 if __name__ == "__main__":
