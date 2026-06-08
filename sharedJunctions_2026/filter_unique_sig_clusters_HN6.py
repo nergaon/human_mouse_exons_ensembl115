@@ -55,6 +55,7 @@ PLOT_A_ONLY_UPSET_SIG_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736
 PLOT_A_ONLY_UPSET_SIG_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_sig.svg"
 PLOT_A_ONLY_UPSET_UNCHANGED_PNG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_unchanged.png"
 PLOT_A_ONLY_UPSET_UNCHANGED_SVG = BASE / "leafcutter_GSE115736_GSE116177" / "GSE115736_GSE116177_upset_unchanged.svg"
+SCATTER_DIR = BASE / "leafcutter_GSE115736_GSE116177" / "cluster_abs_dpsi_vs_mean_expr"
 
 THRESHOLD = 0.05
 SIG_DELTAPSI_THRESHOLD = 0.1
@@ -643,6 +644,89 @@ def build_a_only_summary(df_a: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["cluster", "genes"] + list(CELL_TYPES.keys()))
 
 
+def plot_cluster_abs_dpsi_vs_mean_expr(df_a: pd.DataFrame, output_dir: Path) -> list[Path]:
+    """Plot per-cell-type cluster abs_deltapsi vs mean expression in each dataset.
+
+    Uses only FILE_A rows with numeric p.adjust values. For each cluster:
+      - y: max absolute deltapsi in that cluster
+      - x: mean cluster expression in each dataset average column
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_paths: list[Path] = []
+
+    for ct, (pfx_a, _, _) in CELL_TYPES.items():
+        padj = padj_col(pfx_a)
+        abs_col = abs_deltapsi_col(pfx_a)
+        expr_h = f"GSE115736_avg_{pfx_a}"
+        expr_m = f"GSE116177_avg_{pfx_a}"
+
+        required = ["cluster", padj, abs_col, expr_h, expr_m]
+        if any(col not in df_a.columns for col in required):
+            continue
+
+        tmp = df_a[required].copy()
+        tmp[padj] = pd.to_numeric(tmp[padj], errors="coerce")
+        tmp[abs_col] = pd.to_numeric(tmp[abs_col], errors="coerce").abs()
+        tmp[expr_h] = pd.to_numeric(tmp[expr_h], errors="coerce")
+        tmp[expr_m] = pd.to_numeric(tmp[expr_m], errors="coerce")
+
+        # Keep only success rows (numeric p.adjust), as requested.
+        tmp = tmp[tmp[padj].notna()]
+        if tmp.empty:
+            continue
+
+        cluster_df = (
+            tmp.groupby("cluster", dropna=False)
+            .agg(
+                abs_deltapsi=(abs_col, "max"),
+                mean_expr_gse115736=(expr_h, "mean"),
+                mean_expr_gse116177=(expr_m, "mean"),
+            )
+            .reset_index()
+        )
+
+        plot_h = cluster_df[["mean_expr_gse115736", "abs_deltapsi"]].dropna()
+        plot_m = cluster_df[["mean_expr_gse116177", "abs_deltapsi"]].dropna()
+        if plot_h.empty and plot_m.empty:
+            continue
+
+        plt.close("all")
+        fig, axes = plt.subplots(1, 2, figsize=(10.2, 4.4), sharey=True)
+
+        axes[0].scatter(
+            plot_h["mean_expr_gse115736"],
+            plot_h["abs_deltapsi"],
+            s=14,
+            alpha=0.75,
+            color="#1f77b4",
+            edgecolors="none",
+        )
+        axes[0].set_title(f"{ct}: GSE115736")
+        axes[0].set_xlabel("Mean expression (GSE115736_avg)")
+        axes[0].set_ylabel("Cluster abs_deltapsi (max)")
+
+        axes[1].scatter(
+            plot_m["mean_expr_gse116177"],
+            plot_m["abs_deltapsi"],
+            s=14,
+            alpha=0.75,
+            color="#2ca02c",
+            edgecolors="none",
+        )
+        axes[1].set_title(f"{ct}: GSE116177")
+        axes[1].set_xlabel("Mean expression (GSE116177_avg)")
+
+        fig.suptitle(f"{ct} clusters with numeric p.adjust (n={len(cluster_df):,})", y=1.02)
+        fig.tight_layout()
+
+        out_png = output_dir / f"{ct}_cluster_abs_deltapsi_vs_mean_expr.png"
+        fig.savefig(out_png, dpi=220, bbox_inches="tight")
+        plt.close("all")
+        out_paths.append(out_png)
+
+    return out_paths
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -951,6 +1035,8 @@ def main() -> None:
         output_svg=PLOT_A_ONLY_UPSET_UNCHANGED_SVG,
     )
 
+    scatter_paths = plot_cluster_abs_dpsi_vs_mean_expr(df_a, SCATTER_DIR)
+
     print(f"\nDone. Output written to:\n  {OUTPUT}")
     print(
         "Plots written to:\n"
@@ -967,6 +1053,12 @@ def main() -> None:
         f"  {PLOT_A_ONLY_UPSET_UNCHANGED_PNG}\n"
         f"  {PLOT_A_ONLY_UPSET_UNCHANGED_SVG}"
     )
+    if scatter_paths:
+        print("Cluster scatter plots written to:")
+        for p in scatter_paths:
+            print(f"  {p}")
+    else:
+        print(f"No scatter plots were generated. Check expected columns in: {FILE_A}")
 
 
 if __name__ == "__main__":

@@ -44,6 +44,8 @@ REQUESTED_CELL_TYPES: tuple[str, ...] = (
     "Neu",
 )
 
+PRIMARY_IMMUNE_CELL_TYPES: tuple[str, ...] = ("CD4T", "CD8T", "NveB", "NK", "Mono")
+
 CELL_TYPE_CANDIDATES: dict[str, tuple[str, ...]] = {
     "CD4T": ("CD4T",),
     "CD8T": ("CD8T",),
@@ -355,6 +357,8 @@ def main() -> None:
     background_genes = genes_series_to_set(df_status[genes_col])
     all_diff_genes: set[str] = set()
     all_unchanged_genes: set[str] = set()
+    primary_diff_genes_any: set[str] = set()
+    primary_unchanged_genes_any: set[str] = set()
 
     rows_meta: list[dict[str, str]] = []
     summary: dict[str, object] = {}
@@ -367,6 +371,9 @@ def main() -> None:
         diff_genes = genes_series_to_set(df_status.loc[diff_mask, genes_col])
         all_diff_genes.update(diff_genes)
         all_unchanged_genes.update(unchanged_genes)
+        if ct in PRIMARY_IMMUNE_CELL_TYPES:
+            primary_diff_genes_any.update(diff_genes)
+            primary_unchanged_genes_any.update(unchanged_genes)
 
         ct_dir = OUT_DIR / ct
         ct_dir.mkdir(parents=True, exist_ok=True)
@@ -411,6 +418,55 @@ def main() -> None:
     (OUT_DIR / "summary_counts.json").write_text(json.dumps(summary, indent=2) + "\n")
     write_gene_list(OUT_DIR / "all_differentially_spliced_genes.txt", all_diff_genes)
     write_gene_list(OUT_DIR / "all_splicing_unchanged_genes.txt", all_unchanged_genes)
+    primary_diff_only_genes = primary_diff_genes_any - primary_unchanged_genes_any
+    primary_unchanged_only_genes = primary_unchanged_genes_any - primary_diff_genes_any
+    write_gene_list(
+        OUT_DIR / "genes_diff_in_any_CD4T_CD8T_NveB_NK_Mono_but_never_unchanged.txt",
+        primary_diff_only_genes,
+    )
+    write_gene_list(
+        OUT_DIR / "genes_unchanged_in_any_CD4T_CD8T_NveB_NK_Mono_but_never_diff.txt",
+        primary_unchanged_only_genes,
+    )
+
+    primary_combined_label = "CD4T_CD8T_NveB_NK_Mono"
+    combined_dir = OUT_DIR / primary_combined_label
+    combined_dir.mkdir(parents=True, exist_ok=True)
+    write_gene_list(combined_dir / "background_genes_all_cluster_status_colB.txt", background_genes)
+    write_gene_list(combined_dir / "diff_in_any_but_never_unchanged.txt", primary_diff_only_genes)
+    write_gene_list(combined_dir / "unchanged_in_any_but_never_diff.txt", primary_unchanged_only_genes)
+
+    for library in GO_LIBRARIES:
+        label_diff_only = f"{primary_combined_label}_diff_in_any_but_never_unchanged_{library}"
+        label_unchanged_only = f"{primary_combined_label}_unchanged_in_any_but_never_diff_{library}"
+
+        print(
+            f"[{primary_combined_label}] Running {library} enrichment for diff-in-any but never-unchanged",
+            flush=True,
+        )
+        run_go_with_background(label_diff_only, primary_diff_only_genes, background_genes, library, OUT_DIR)
+        print(
+            f"[{primary_combined_label}] Running {library} enrichment for unchanged-in-any but never-diff",
+            flush=True,
+        )
+        run_go_with_background(label_unchanged_only, primary_unchanged_only_genes, background_genes, library, OUT_DIR)
+
+        rows_meta.append(
+            {
+                "label": label_diff_only,
+                "library": library,
+                "cell_type": primary_combined_label,
+                "type_of_list": "diff in any, never unchanged",
+            }
+        )
+        rows_meta.append(
+            {
+                "label": label_unchanged_only,
+                "library": library,
+                "cell_type": primary_combined_label,
+                "type_of_list": "unchanged in any, never diff",
+            }
+        )
 
     final_all_table = build_go_table(rows_meta, OUT_DIR, significant_only=False)
     if final_all_table.empty:
