@@ -29,15 +29,19 @@ GENE_TABLE_FIBRO = BASE / "leafcutter_EMTAB5919H_EMTAB5919M" / "clusters_sum_tab
 OUTPUT_DIR = BASE / "genes_figs_selected_clusters"
 
 TARGET_CLUSTERS = [
-    "chr21:clu_46835",
-    "chr9:clu_81561",
-    "chr9:clu_80597",
-    "chr8:clu_76270",
-    "clur3:clu_57873",
-    "chr6:clu_68620",
+    #"chr21:clu_46835",
+    #"chr9:clu_81561",
+    #"chr9:clu_80597",
+    #"chr8:clu_76270",
+    #"clur3:clu_57873",
+    #"chr6:clu_68620",
+    #"chr3:clu_60710",
+    #"chr3:clu_60717",
+    "chr14:clu_15672"
 ]
 
 CELL_GROUP_ORDER = ["Mono", "NveB", "NK", "CD8", "CD4", "Fibroblast"]
+IMMUNE_CELL_GROUPS = ["Mono", "NveB", "NK", "CD8", "CD4"]
 DATASET_ORDER = ["GSE180020", "GSE116177", "GSE115736", "GSE60424", "MM", "HS"]
 DATASET_LABELS = {
     "GSE180020": "M2",
@@ -150,7 +154,13 @@ def _sort_samples(samples: List[str]) -> List[str]:
     return sorted(samples, key=key)
 
 
-def _build_positions(samples_sorted: List[str], within_step: float = 0.30, dataset_gap: float = 0.5, cell_gap: float = 0.65) -> np.ndarray:
+def _build_positions(
+    samples_sorted: List[str],
+    within_step: float = 0.30,
+    dataset_gap: float = 0.5,
+    cell_gap: float = 0.65,
+    fibro_gap: float = 2.50,
+) -> np.ndarray:
     if not samples_sorted:
         return np.array([])
     pos = np.zeros(len(samples_sorted), dtype=float)
@@ -163,7 +173,11 @@ def _build_positions(samples_sorted: List[str], within_step: float = 0.30, datas
         if cur_ds != prev_ds:
             pos[i] += dataset_gap
         if cur_cell != prev_cell:
-            pos[i] += cell_gap
+            # Make fibroblast visually separate from immune cell blocks.
+            if "Fibroblast" in {cur_cell, prev_cell}:
+                pos[i] += fibro_gap
+            else:
+                pos[i] += cell_gap
         prev_cell = cur_cell
         prev_ds = cur_ds
     return pos
@@ -253,7 +267,9 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
     legend_handles = [Patch(facecolor=colors[i], edgecolor="none", label=legend_labels[i]) for i in range(len(intron_rows))]
 
     samples_sorted = _sort_samples(sample_cols)
-    positions = _build_positions(samples_sorted)
+    bar_w = 0.19
+    # Keep samples from the same dataset contiguous (no extra intra-dataset gap).
+    positions = _build_positions(samples_sorted, within_step=bar_w)
     segments = _group_segments(samples_sorted)
     ds_blocks = _contiguous_dataset_blocks(samples_sorted, positions)
 
@@ -273,7 +289,6 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
         sharex=False,
     )
 
-    bar_w = 0.19
     for i in range(len(intron_rows)):
         c = colors[i]
         ax_top.bar(positions, cnt_vals[i], width=bar_w, bottom=bottom_cnt, color=c, edgecolor="none")
@@ -319,10 +334,18 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
     ax_bottom.set_ylim(0, 1)
 
     # Separate cell-type blocks with vertical guide lines.
-    for _, s, e in segments[:-1]:
+    for i, (grp, s, e) in enumerate(segments[:-1]):
+        next_grp = segments[i + 1][0]
         x_sep = (positions[e] + positions[e + 1]) / 2.0
-        ax_top.axvline(x_sep, color="#999999", linewidth=0.8)
-        ax_bottom.axvline(x_sep, color="#999999", linewidth=0.8)
+        is_fibro_boundary = "Fibroblast" in {grp, next_grp}
+        if is_fibro_boundary:
+            band_half = bar_w * 1.2
+            ax_top.axvspan(x_sep - band_half, x_sep + band_half, color="#f0f0f0", alpha=0.9, zorder=0)
+            ax_bottom.axvspan(x_sep - band_half, x_sep + band_half, color="#f0f0f0", alpha=0.9, zorder=0)
+        sep_color = "#4d4d4d" if is_fibro_boundary else "#999999"
+        sep_lw = 1.8 if is_fibro_boundary else 0.8
+        ax_top.axvline(x_sep, color=sep_color, linewidth=sep_lw)
+        ax_bottom.axvline(x_sep, color=sep_color, linewidth=sep_lw)
 
     fig.suptitle(gene_title if gene_title else cluster_id, fontsize=10)
     fig.legend(legend_handles, legend_labels, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=4, frameon=False)

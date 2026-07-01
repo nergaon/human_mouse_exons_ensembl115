@@ -17,6 +17,11 @@ try:
 except ModuleNotFoundError:
     plt = None
 
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    pd = None
+
 SHARED_JUNCTIONS_DIR = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026")
 METADATA_FILE = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/unique_points_HN6.txt")
 VALUE_FILE = SHARED_JUNCTIONS_DIR / "AS_clusters_value_HN6.txt"
@@ -740,14 +745,15 @@ def merge_leafcutter_results(
     all_junctions = load_junctions_with_as_averages(value_file, dataset_a, dataset_b, cell_types)
 
     # Build output: one row per junction
-    output_rows = []
+    output_rows_abs = []
+    output_rows_signed = []
     for junc_info in all_junctions:
         h_junction = junc_info["h_junction"]
         cluster_id = junc_info["cluster_id"]
 
         junc_meta = lookup_junction_metadata(h_junction, metadata)
 
-        row = {
+        row_abs = {
             "h_junction": h_junction,
             "m_junction": junc_meta["m_junction"],
             "symbol_h":   junc_meta["symbol_h"],
@@ -757,6 +763,7 @@ def merge_leafcutter_results(
             "cluster":    cluster_id,
             "genes":      "",
         }
+        row_signed = row_abs.copy()
 
         for ct in cell_types:
             eff_row = cell_eff[ct].get(h_junction, {})
@@ -772,40 +779,56 @@ def merge_leafcutter_results(
                 sig_row = cell_sig[ct].get(ct_cluster, {}) if ct_cluster else {}
 
                 try:
-                    deltapsi_abs = f"{abs(float(eff_row.get('deltapsi', 0))):.10g}"
+                    deltapsi_raw = float(eff_row.get("deltapsi", 0))
+                    deltapsi_abs = f"{abs(deltapsi_raw):.10g}"
+                    deltapsi_signed = f"{deltapsi_raw:.10g}"
                 except (ValueError, TypeError):
                     deltapsi_abs = ""
+                    deltapsi_signed = ""
 
                 p_adjust    = sig_row.get("p.adjust", "")
                 gene_name   = sig_row.get("genes", "")
-                if gene_name and not row["genes"]:
-                    row["genes"] = gene_name
-                    if not row["symbol_h"]:
-                        row["symbol_h"] = gene_name
+                if gene_name and not row_abs["genes"]:
+                    row_abs["genes"] = gene_name
+                    row_signed["genes"] = gene_name
+                    if not row_abs["symbol_h"]:
+                        row_abs["symbol_h"] = gene_name
+                        row_signed["symbol_h"] = gene_name
             else:
                 deltapsi_abs = ""
+                deltapsi_signed = ""
                 p_adjust     = ""
 
             as_avgs = junc_info.get("as_avgs", {})
             dataset_a_v = as_avgs.get((dataset_a, ct), "")
             dataset_b_v = as_avgs.get((dataset_b, ct), "")
 
-            row[f"{ct}_abs_deltapsi"]      = deltapsi_abs
-            row[f"{ct}_p.adjust"]          = p_adjust
-            row[f"{dataset_a}_avg_{ct}"]   = dataset_a_v
-            row[f"{dataset_b}_avg_{ct}"]   = dataset_b_v
+            row_abs[f"{ct}_abs_deltapsi"]      = deltapsi_abs
+            row_abs[f"{ct}_p.adjust"]          = p_adjust
+            row_abs[f"{dataset_a}_avg_{ct}"]   = dataset_a_v
+            row_abs[f"{dataset_b}_avg_{ct}"]   = dataset_b_v
+
+            # In the signed sheet, keep the same column names as the first sheet
+            # but write signed deltapsi values instead of absolute values.
+            row_signed[f"{ct}_abs_deltapsi"]      = deltapsi_signed
+            row_signed[f"{ct}_p.adjust"]          = p_adjust
+            row_signed[f"{dataset_a}_avg_{ct}"]   = dataset_a_v
+            row_signed[f"{dataset_b}_avg_{ct}"]   = dataset_b_v
 
         # Last resort: fill genes from significance using cluster from value file
-        if not row["genes"]:
+        if not row_abs["genes"]:
             for ct in cell_types:
                 sig_row = cell_sig[ct].get(cluster_id, {})
                 if sig_row.get("genes"):
-                    row["genes"] = sig_row["genes"]
-                    if not row["symbol_h"]:
-                        row["symbol_h"] = sig_row["genes"]
+                    row_abs["genes"] = sig_row["genes"]
+                    row_signed["genes"] = sig_row["genes"]
+                    if not row_abs["symbol_h"]:
+                        row_abs["symbol_h"] = sig_row["genes"]
+                        row_signed["symbol_h"] = sig_row["genes"]
                     break
 
-        output_rows.append(row)
+        output_rows_abs.append(row_abs)
+        output_rows_signed.append(row_signed)
 
     # Write TSV
     output_file = leafcutter_dir / "clusters_sum_table_HN6.txt"
@@ -824,10 +847,27 @@ def merge_leafcutter_results(
     with output_file.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=final_cols, delimiter="\t", lineterminator="\n")
         writer.writerow({c: c for c in final_cols})
-        for row in output_rows:
+        for row in output_rows_abs:
             writer.writerow({c: row.get(c, "") for c in final_cols})
 
-    print(f"Wrote {output_file}: {len(output_rows)} rows, {len(cell_types)} cell types")
+    print(f"Wrote {output_file}: {len(output_rows_abs)} rows, {len(cell_types)} cell types")
+
+    # Also write an Excel workbook with two sheets:
+    # - abs_deltapsi: same content as clusters_sum_table_HN6.txt
+    # - deltapsi: same layout, but *_abs_deltapsi columns contain signed deltapsi values
+    if pd is not None:
+        output_xlsx = leafcutter_dir / "clusters_sum_table_HN6.xlsx"
+        df_abs = pd.DataFrame(output_rows_abs, columns=final_cols)
+        df_signed = pd.DataFrame(output_rows_signed, columns=final_cols)
+        with pd.ExcelWriter(output_xlsx, engine="openpyxl") as writer:
+            df_abs.to_excel(writer, sheet_name="abs_deltapsi", index=False)
+            df_signed.to_excel(writer, sheet_name="deltapsi", index=False)
+        print(f"Wrote {output_xlsx}: sheets abs_deltapsi, deltapsi")
+    else:
+        print(
+            "Skipping Excel workbook with two sheets because pandas is not installed. "
+            "clusters_sum_table_HN6.txt was still written."
+        )
 
 
 def main() -> None:

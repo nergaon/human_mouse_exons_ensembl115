@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.gridspec import GridSpec
+from matplotlib.legend_handler import HandlerBase
 from matplotlib.patches import Patch
 
 # -----------------------------------------------------------------------------
@@ -50,6 +51,8 @@ STATUS_HIGH_CHANGE = "high confidance differentially spliced"
 STATUS_LOW_CHANGE = "low confidance differentially spliced"
 STATUS_HIGH_CONSERVED = "high confidance splicing unchanged"
 STATUS_LOW_CONSERVED = "low confidance splicing unchanged"
+STATUS_CHANGE_NO_CONF = "differentially spliced"
+STATUS_CONSERVED_NO_CONF = "splicing unchanged"
 STATUS_NOT_INFORMATIVE = "not informative"
 STATUS_NOT_SUCCESS = "not success"
 
@@ -65,12 +68,88 @@ CELL_TYPES_UPSET = ["CD4T", "CD8T", "NveB", "NK", "Mono"]
 # Palette aligned with existing script
 COLOR_SIG = "#74c476"          # green
 COLOR_UNCH = "#9ecae1"         # light blue
-COLOR_NOINFO = "#deebf7"       # very light blue
+COLOR_NOINFO = "#f5f5f5"       # off-white
 COLOR_EDGE = "#4d4d4d"
+COLOR_UPSET_BAR = "#9e9e9e"    # gray bars for UpSet top histograms
 LOW_HATCH = ".."
 
 FONT_FAMILY = "DejaVu Sans"
 FONT_SIZE = 7.0
+
+
+class _ThreeDotRectLegendHandler(HandlerBase):
+    """Draw a rectangle with three centered dots for low-confidence legend entries."""
+
+    def create_artists(
+        self,
+        legend,
+        orig_handle,
+        xdescent,
+        ydescent,
+        width,
+        height,
+        fontsize,
+        trans,
+    ):
+        rect = plt.Rectangle(
+            (xdescent, ydescent),
+            width,
+            height,
+            facecolor=orig_handle.get_facecolor(),
+            edgecolor=orig_handle.get_edgecolor(),
+            linewidth=orig_handle.get_linewidth(),
+            transform=trans,
+        )
+
+        cy = ydescent + 0.5 * height
+        # Increase dot size by 1.5x from previous setting.
+        r = min(width, height) * 0.24
+        dot_color = orig_handle.get_edgecolor()
+
+        # Use 3 dots when there is room; otherwise fall back to 2 dots.
+        n_dots = 3 if width >= (8.0 * r) else 2
+        left_x = xdescent + 0.18 * width
+        right_x = xdescent + 0.82 * width
+        xs = np.linspace(left_x, right_x, n_dots).tolist()
+
+        dots = [
+            plt.Circle((x, cy), r, facecolor=dot_color, edgecolor=dot_color, linewidth=0.0, transform=trans)
+            for x in xs
+        ]
+        return [rect, *dots]
+
+
+def _add_panel_label(ax: plt.Axes, label: str) -> None:
+    ax.text(
+        -0.14,
+        1.05,
+        label,
+        transform=ax.transAxes,
+        fontsize=FONT_SIZE + 2.0,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
+    )
+
+
+def _add_panel_label_aligned_to_top_row(
+    fig: plt.Figure,
+    ax_for_x: plt.Axes,
+    ax_top_ref: plt.Axes,
+    label: str,
+) -> None:
+    """Place a panel label at the same figure y-level as the top-row labels."""
+    x0 = ax_for_x.get_position().x0
+    y1 = ax_top_ref.get_position().y1
+    fig.text(
+        x0 - 0.028,
+        y1 + 0.010,
+        label,
+        fontsize=FONT_SIZE + 2.0,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
+    )
 
 
 def _configure_style() -> None:
@@ -85,6 +164,7 @@ def _configure_style() -> None:
             "axes.titlesize": FONT_SIZE,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "hatch.linewidth": 1.3,
             "savefig.dpi": 1200,
         }
     )
@@ -95,6 +175,13 @@ def _first_gene_label(genes_text: object) -> str:
     if not txt or txt.lower() == "nan":
         return ""
     return re.split(r"[;,|]", txt, maxsplit=1)[0].strip()
+
+
+def _all_gene_labels(genes_text: object) -> list[str]:
+    txt = str(genes_text).strip()
+    if not txt or txt.lower() == "nan":
+        return []
+    return [g.strip() for g in re.split(r"[;,|]", txt) if g.strip()]
 
 
 def _read_pair_sum_table(sum_table: Path, cell_order: list[str]) -> dict[str, dict[str, float]]:
@@ -147,10 +234,27 @@ def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
         CELL_TYPES_UPSET + ["Neut", "Fibroblast"],
         CELL_TYPES_UPSET,
     ]
+    panel_display_labels = [
+        CELL_TYPES_UPSET,
+        CELL_TYPES_UPSET + ["", "Fibroblast"],
+        CELL_TYPES_UPSET,
+    ]
 
     for panel_idx, (ax, (_, _, sum_table)) in enumerate(zip(axes, PAIR_DIRS)):
         summary_by_cell = _read_pair_sum_table(sum_table, panel_cell_orders[panel_idx])
+
+        # Match panel D behavior for Neut: keep a placeholder slot in panel B
+        # but remove all Neut contributions from the stacked bars.
+        if panel_idx == 1 and "Neut" in summary_by_cell:
+            summary_by_cell["Neut"] = {
+                "success": 0.0,
+                "sig_dpsi_01": 0.0,
+                "unchanged": 0.0,
+                "not_informative": 0.0,
+            }
+
         display_cell_types = [ct for ct in panel_cell_orders[panel_idx] if ct in summary_by_cell]
+        display_labels = panel_display_labels[panel_idx][: len(display_cell_types)]
 
         success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
         sig_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
@@ -170,11 +274,11 @@ def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
         ax.set_xticks(x)
         rotation = 35 if panel_idx == 1 else 0
         ha = "right" if panel_idx == 1 else "center"
-        ax.set_xticklabels(display_cell_types, rotation=rotation, ha=ha)
+        ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
         ax.tick_params(axis="x", pad=1.5)
         ax.margins(x=0.0)
         ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
-        ax.set_ylim(0, 110)
+        ax.set_ylim(0, 100)
 
     axes[0].set_ylabel("Percent of success clusters (%)")
     for idx, ax in enumerate(axes):
@@ -193,9 +297,30 @@ def _draw_top_three_panels_possible_as(axes: list[plt.Axes]) -> None:
         "sig_dpsi_01": COLOR_SIG,
     }
 
+    panel_cell_orders = [
+        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
+        ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"],
+        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
+    ]
+    panel_display_labels = [
+        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
+        ["CD4T", "CD8T", "NveB", "NK", "Mono", "", "Fibroblast"],
+        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
+    ]
+
     for panel_idx, (ax, (_, _, sum_table)) in enumerate(zip(axes, PAIR_DIRS)):
         summary_by_cell = _read_pair_sum_table_all_cells(sum_table)
-        display_cell_types = [ct for ct in ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"] if ct in summary_by_cell]
+        # In S1 panel B keep Neut as a fully blank placeholder (background only).
+        if panel_idx == 1 and "Neut" in summary_by_cell:
+            summary_by_cell["Neut"] = {
+                "success": float(POSSIBLE_AS_CLUSTERS),
+                "sig_dpsi_01": 0.0,
+                "unchanged": 0.0,
+                "not_informative": 0.0,
+            }
+
+        display_cell_types = [ct for ct in panel_cell_orders[panel_idx] if ct in summary_by_cell]
+        display_labels = panel_display_labels[panel_idx][: len(display_cell_types)]
 
         success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
         sig_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
@@ -222,11 +347,11 @@ def _draw_top_three_panels_possible_as(axes: list[plt.Axes]) -> None:
         ax.set_xticks(x)
         rotation = 35 if panel_idx == 1 else 0
         ha = "right" if panel_idx == 1 else "center"
-        ax.set_xticklabels(display_cell_types, rotation=rotation, ha=ha)
+        ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
         ax.tick_params(axis="x", pad=1.5)
         ax.margins(x=0.0)
         ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
-        ax.set_ylim(0, 110)
+        ax.set_ylim(0, 100)
 
     axes[0].set_ylabel(f"Percent of possible AS clusters (n={POSSIBLE_AS_CLUSTERS})")
     for idx, ax in enumerate(axes):
@@ -317,6 +442,7 @@ def _draw_upset_on_subspec(
     full_status_df: pd.DataFrame,
     status_label: str,
     max_combinations: int = 36,
+    panel_label: str | None = None,
 ) -> None:
     ct_cols = [ct for ct in CELL_TYPES_UPSET if ct in full_status_df.columns]
     intersections = _exclusive_intersections(full_status_df, status_label, ct_cols)
@@ -324,6 +450,8 @@ def _draw_upset_on_subspec(
     sub = outer_subspec.subgridspec(2, 1, height_ratios=[3, 2], hspace=0.06)
     ax_bar = fig.add_subplot(sub[0])
     ax_mat = fig.add_subplot(sub[1], sharex=ax_bar)
+    if panel_label:
+        _add_panel_label(ax_bar, panel_label)
 
     if not intersections:
         ax_bar.text(
@@ -348,7 +476,7 @@ def _draw_upset_on_subspec(
     counts = [count for _, count in ordered]
     x = np.arange(len(combos))
 
-    ax_bar.bar(x, counts, color="#2b8cbe")
+    ax_bar.bar(x, counts, color=COLOR_UPSET_BAR)
     ax_bar.set_ylabel("Clusters")
     ax_bar.set_ylim(0, max(counts) * 1.18)
     ax_bar.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
@@ -381,36 +509,91 @@ def _draw_upset_on_subspec(
     ax_mat.grid(axis="x", linestyle=":", linewidth=0.4, alpha=0.35)
 
 
-def _draw_heatmap(ax: plt.Axes, full_status_df: pd.DataFrame) -> int:
-    """Side heatmap for clusters high confidence in at least 2 cell types."""
-    ct_cols = [ct for ct in CELL_TYPES_UPSET if ct in full_status_df.columns]
+def _draw_heatmap(
+    ax: plt.Axes,
+    full_status_df: pd.DataFrame,
+    min_high_cells: int,
+    max_high_cells: int | None = None,
+    gene_label_stride: int = 3,
+    include_fibroblast: bool = False,
+) -> tuple[int, list[str]]:
+    """Heatmap for clusters high confidence in a configurable number of immune cell types."""
+    ct_candidates = CELL_TYPES_UPSET + (["Fibroblast"] if include_fibroblast else [])
+    ct_cols = [ct for ct in ct_candidates if ct in full_status_df.columns]
 
-    high_mask = full_status_df[ct_cols].isin({STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED})
-    keep = high_mask.sum(axis=1) >= 2
+    # For Fibroblast, use confidence-agnostic status (high OR low) because
+    # high-confidence categories are not available/reliable there.
+    high_mask = pd.DataFrame(index=full_status_df.index)
+    for ct in ct_cols:
+        if ct == "Fibroblast":
+            valid_states = {
+                STATUS_HIGH_CHANGE,
+                STATUS_LOW_CHANGE,
+                STATUS_CHANGE_NO_CONF,
+                STATUS_HIGH_CONSERVED,
+                STATUS_LOW_CONSERVED,
+                STATUS_CONSERVED_NO_CONF,
+            }
+        else:
+            valid_states = {STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED}
+        high_mask[ct] = full_status_df[ct].isin(valid_states)
+    n_high = high_mask.sum(axis=1)
+    if max_high_cells is None:
+        keep = n_high >= min_high_cells
+    else:
+        keep = (n_high >= min_high_cells) & (n_high <= max_high_cells)
     df_h = full_status_df.loc[keep, ["cluster", "genes"] + ct_cols].copy()
 
     if df_h.empty:
+        if max_high_cells is None:
+            msg = f"No clusters with high confidence in >= {min_high_cells} cell types"
+        else:
+            msg = f"No clusters with high confidence in {min_high_cells}-{max_high_cells} cell types"
         ax.text(
             0.5,
             0.5,
-            "No clusters with high confidence in >= 2 cell types",
+            msg,
             ha="center",
             va="center",
             transform=ax.transAxes,
             fontsize=FONT_SIZE,
         )
         ax.set_axis_off()
-        return 0
+        return 0, []
 
-    # Sort by number of high-confidence statuses, then by pattern for readability.
-    df_h["__n_high"] = df_h[ct_cols].isin({STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED}).sum(axis=1)
+    # Sort by number of selected statuses, then by pattern for readability.
+    n_selected = np.zeros(len(df_h), dtype=int)
     for ct in ct_cols:
-        df_h[f"__sort_{ct}"] = df_h[ct].map(
-            {
+        if ct == "Fibroblast":
+            valid_states = {
+                STATUS_HIGH_CHANGE,
+                STATUS_LOW_CHANGE,
+                STATUS_CHANGE_NO_CONF,
+                STATUS_HIGH_CONSERVED,
+                STATUS_LOW_CONSERVED,
+                STATUS_CONSERVED_NO_CONF,
+            }
+        else:
+            valid_states = {STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED}
+        n_selected += df_h[ct].isin(valid_states).to_numpy(dtype=int)
+    df_h["__n_high"] = n_selected
+
+    for ct in ct_cols:
+        if ct == "Fibroblast":
+            sort_map = {
+                STATUS_HIGH_CHANGE: 0,
+                STATUS_LOW_CHANGE: 0,
+                STATUS_CHANGE_NO_CONF: 0,
+                STATUS_HIGH_CONSERVED: 1,
+                STATUS_LOW_CONSERVED: 1,
+                STATUS_CONSERVED_NO_CONF: 1,
+            }
+        else:
+            sort_map = {
                 STATUS_HIGH_CHANGE: 0,
                 STATUS_HIGH_CONSERVED: 1,
             }
-        ).fillna(2)
+        df_h[f"__sort_{ct}"] = df_h[ct].map(sort_map).fillna(2)
 
     sort_cols = ["__n_high"] + [f"__sort_{ct}" for ct in ct_cols] + ["genes", "cluster"]
     ascending = [False] + [True] * (len(sort_cols) - 1)
@@ -419,7 +602,18 @@ def _draw_heatmap(ax: plt.Axes, full_status_df: pd.DataFrame) -> int:
     mat = np.full((len(df_h), len(ct_cols)), 2.0, dtype=float)
     for j, ct in enumerate(ct_cols):
         col = df_h[ct]
-        mat[:, j] = np.where(col == STATUS_HIGH_CHANGE, 1.0, np.where(col == STATUS_HIGH_CONSERVED, 0.0, 2.0))
+        if ct == "Fibroblast":
+            mat[:, j] = np.where(
+                col.isin({STATUS_HIGH_CHANGE, STATUS_LOW_CHANGE, STATUS_CHANGE_NO_CONF}),
+                1.0,
+                np.where(
+                    col.isin({STATUS_HIGH_CONSERVED, STATUS_LOW_CONSERVED, STATUS_CONSERVED_NO_CONF}),
+                    0.0,
+                    2.0,
+                ),
+            )
+        else:
+            mat[:, j] = np.where(col == STATUS_HIGH_CHANGE, 1.0, np.where(col == STATUS_HIGH_CONSERVED, 0.0, 2.0))
 
     cmap = ListedColormap(["#9ecae1", "#74c476", COLOR_NOINFO])
     norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
@@ -432,13 +626,176 @@ def _draw_heatmap(ax: plt.Axes, full_status_df: pd.DataFrame) -> int:
 
     y_font = max(2.5, FONT_SIZE - 2.5)
     row_labels_full = [_first_gene_label(v) for v in df_h["genes"]]
-    row_labels = [lbl if i % 5 == 0 else "" for i, lbl in enumerate(row_labels_full)]
+    if gene_label_stride <= 1:
+        row_labels = row_labels_full
+    else:
+        row_labels = [lbl if i % gene_label_stride == 0 else "" for i, lbl in enumerate(row_labels_full)]
     ax.set_yticks(np.arange(len(df_h)) + 0.5)
     ax.set_yticklabels(row_labels, fontsize=y_font)
     ax.invert_yaxis()
     ax.set_ylabel("")
 
-    return len(df_h)
+    gene_names = sorted({g for txt in df_h["genes"] for g in _all_gene_labels(txt)})
+    return len(df_h), gene_names
+
+
+def _prepare_panel_g_data(
+    full_status_df: pd.DataFrame,
+    min_high_cells: int,
+    max_high_cells: int | None = None,
+) -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray, list[str]]:
+    """Prepare aligned immune and Fibroblast matrices for panel G."""
+    immune_cols = [ct for ct in CELL_TYPES_UPSET if ct in full_status_df.columns]
+    ct_cols = immune_cols + (["Fibroblast"] if "Fibroblast" in full_status_df.columns else [])
+
+    high_mask = pd.DataFrame(index=full_status_df.index)
+    for ct in ct_cols:
+        if ct == "Fibroblast":
+            valid_states = {
+                STATUS_HIGH_CHANGE,
+                STATUS_LOW_CHANGE,
+                STATUS_CHANGE_NO_CONF,
+                STATUS_HIGH_CONSERVED,
+                STATUS_LOW_CONSERVED,
+                STATUS_CONSERVED_NO_CONF,
+            }
+        else:
+            valid_states = {STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED}
+        high_mask[ct] = full_status_df[ct].isin(valid_states)
+
+    n_high = high_mask.sum(axis=1)
+    if max_high_cells is None:
+        keep = n_high >= min_high_cells
+    else:
+        keep = (n_high >= min_high_cells) & (n_high <= max_high_cells)
+
+    cols = ["cluster", "genes"] + ct_cols
+    has_fibro = "Fibroblast" in ct_cols
+    df_h = full_status_df.loc[keep, cols].copy()
+
+    if df_h.empty:
+        return df_h, immune_cols, np.zeros((0, len(immune_cols))), np.zeros((0, 1)), []
+
+    n_selected = np.zeros(len(df_h), dtype=int)
+    for ct in ct_cols:
+        if ct == "Fibroblast":
+            valid_states = {
+                STATUS_HIGH_CHANGE,
+                STATUS_LOW_CHANGE,
+                STATUS_CHANGE_NO_CONF,
+                STATUS_HIGH_CONSERVED,
+                STATUS_LOW_CONSERVED,
+                STATUS_CONSERVED_NO_CONF,
+            }
+        else:
+            valid_states = {STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED}
+        n_selected += df_h[ct].isin(valid_states).to_numpy(dtype=int)
+    df_h["__n_high"] = n_selected
+
+    for ct in ct_cols:
+        if ct == "Fibroblast":
+            sort_map = {
+                STATUS_HIGH_CHANGE: 0,
+                STATUS_LOW_CHANGE: 0,
+                STATUS_CHANGE_NO_CONF: 0,
+                STATUS_HIGH_CONSERVED: 1,
+                STATUS_LOW_CONSERVED: 1,
+                STATUS_CONSERVED_NO_CONF: 1,
+            }
+        else:
+            sort_map = {
+                STATUS_HIGH_CHANGE: 0,
+                STATUS_HIGH_CONSERVED: 1,
+            }
+        df_h[f"__sort_{ct}"] = df_h[ct].map(sort_map).fillna(2)
+
+    sort_cols = ["__n_high"] + [f"__sort_{ct}" for ct in ct_cols]
+    sort_cols += ["genes", "cluster"]
+
+    ascending = [False] + [True] * (len(sort_cols) - 1)
+    df_h = df_h.sort_values(sort_cols, ascending=ascending, kind="stable").reset_index(drop=True)
+    # Reverse row order for display so first/last genes are swapped.
+    df_h = df_h.iloc[::-1].reset_index(drop=True)
+
+    mat_immune = np.full((len(df_h), len(immune_cols)), 2.0, dtype=float)
+    for j, ct in enumerate(immune_cols):
+        col = df_h[ct]
+        mat_immune[:, j] = np.where(col == STATUS_HIGH_CHANGE, 1.0, np.where(col == STATUS_HIGH_CONSERVED, 0.0, 2.0))
+
+    fibro_col = df_h["Fibroblast"] if has_fibro else pd.Series([""] * len(df_h))
+    fibro_mat = np.where(
+        fibro_col.isin({STATUS_HIGH_CHANGE, STATUS_LOW_CHANGE, STATUS_CHANGE_NO_CONF}),
+        1.0,
+        np.where(
+            fibro_col.isin({STATUS_HIGH_CONSERVED, STATUS_LOW_CONSERVED, STATUS_CONSERVED_NO_CONF}),
+            0.0,
+            2.0,
+        ),
+    ).reshape(-1, 1)
+
+    gene_names = sorted({g for txt in df_h["genes"] for g in _all_gene_labels(txt)})
+    return df_h, immune_cols, mat_immune, fibro_mat, gene_names
+
+
+def _draw_panel_g_split_heatmaps(
+    fig: plt.Figure,
+    outer_subspec,
+    full_status_df: pd.DataFrame,
+    min_high_cells: int,
+    max_high_cells: int | None = None,
+    gene_label_stride: int = 3,
+) -> tuple[plt.Axes, int, list[str]]:
+    """Draw panel G with separate immune and Fibroblast heatmaps."""
+    sub = outer_subspec.subgridspec(1, 2, width_ratios=[5.0, 1.15], wspace=0.08)
+    ax_immune = fig.add_subplot(sub[0, 0])
+    ax_fibro = fig.add_subplot(sub[0, 1], sharey=ax_immune)
+
+    df_h, immune_cols, mat_immune, fibro_mat, gene_names = _prepare_panel_g_data(
+        full_status_df,
+        min_high_cells=min_high_cells,
+        max_high_cells=max_high_cells,
+    )
+
+    if df_h.empty:
+        if max_high_cells is None:
+            msg = f"No clusters with high confidence in >= {min_high_cells} cell types"
+        else:
+            msg = f"No clusters with high confidence in {min_high_cells}-{max_high_cells} cell types"
+        ax_immune.text(0.5, 0.5, msg, ha="center", va="center", transform=ax_immune.transAxes, fontsize=FONT_SIZE)
+        ax_immune.set_axis_off()
+        ax_fibro.set_axis_off()
+        return ax_immune, 0, []
+
+    cmap = ListedColormap(["#9ecae1", "#74c476", COLOR_NOINFO])
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
+
+    ax_immune.pcolormesh(mat_immune, cmap=cmap, norm=norm)
+    ax_immune.set_xticks(np.arange(len(immune_cols)) + 0.5)
+    ax_immune.set_xticklabels(immune_cols, fontsize=FONT_SIZE, rotation=45, ha="left")
+    ax_immune.xaxis.set_ticks_position("top")
+    ax_immune.xaxis.set_label_position("top")
+
+    y_font = max(2.5, FONT_SIZE - 2.5)
+    row_labels_full = [_first_gene_label(v) for v in df_h["genes"]]
+    if gene_label_stride <= 1:
+        row_labels = row_labels_full
+    else:
+        row_labels = [lbl if i % gene_label_stride == 0 else "" for i, lbl in enumerate(row_labels_full)]
+    ax_immune.set_yticks(np.arange(len(df_h)) + 0.5)
+    ax_immune.set_yticklabels(row_labels, fontsize=y_font)
+    ax_immune.invert_yaxis()
+    ax_immune.set_ylabel("")
+
+    ax_fibro.pcolormesh(fibro_mat, cmap=cmap, norm=norm)
+    ax_fibro.set_xticks([0.5])
+    ax_fibro.set_xticklabels(["Fibroblast"], fontsize=FONT_SIZE, rotation=45, ha="left")
+    ax_fibro.xaxis.set_ticks_position("top")
+    ax_fibro.xaxis.set_label_position("top")
+    ax_fibro.tick_params(axis="y", which="both", left=False, labelleft=False)
+    ax_fibro.invert_yaxis()
+    ax_fibro.set_ylabel("")
+
+    return ax_immune, len(df_h), gene_names
 
 
 def _draw_middle_panel(ax: plt.Axes, full_status_df: pd.DataFrame) -> None:
@@ -468,11 +825,44 @@ def _draw_middle_panel(ax: plt.Axes, full_status_df: pd.DataFrame) -> None:
     # middle segment above in most PDF viewers.
     ax.margins(x=0.0)
     ax.set_xlim(-0.5, len(labels) - 0.5)
-    ax.set_ylim(0, 110)
+    ax.set_ylim(0, 100)
     ax.set_ylabel("Percent of success clusters (%)")
 
     # Keep a single legend in the whole page: this panel only.
-    ax.legend(frameon=False, fontsize=FONT_SIZE, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=1)
+    low_unch_handle = Patch(
+        facecolor=COLOR_UNCH,
+        edgecolor=COLOR_EDGE,
+        linewidth=0.5,
+        label="low confidence splicing unchanged",
+    )
+    low_sig_handle = Patch(
+        facecolor=COLOR_SIG,
+        edgecolor=COLOR_EDGE,
+        linewidth=0.5,
+        label="low confidence differentially spliced",
+    )
+
+    legend_handles = [
+        Patch(facecolor=COLOR_NOINFO, edgecolor=bar_edge, label="not informative"),
+        Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="high confidence splicing unchanged"),
+        low_unch_handle,
+        Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="high confidence differentially spliced"),
+        low_sig_handle,
+    ]
+    ax.legend(
+        handles=legend_handles,
+        handler_map={
+            low_unch_handle: _ThreeDotRectLegendHandler(),
+            low_sig_handle: _ThreeDotRectLegendHandler(),
+        },
+        frameon=False,
+        fontsize=FONT_SIZE,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        ncol=1,
+        handlelength=2.0,
+        handleheight=0.9,
+    )
 
 
 def _draw_middle_panel_all_clusters(ax: plt.Axes, full_status_df: pd.DataFrame) -> None:
@@ -499,19 +889,21 @@ def _draw_middle_panel_all_clusters(ax: plt.Axes, full_status_df: pd.DataFrame) 
         v_low_unch[i] = float((s == STATUS_LOW_CONSERVED).sum())
         v_noinfo[i] = float((s == STATUS_NOT_INFORMATIVE).sum())
 
+    # Keep stack order consistent with top panels: not success -> not informative
+    # -> unchanged -> sig.
     b2 = v_not_success
-    b3 = b2 + v_high_sig
-    b4 = b3 + v_low_sig
-    b5 = b4 + v_high_unch
-    b6 = b5 + v_low_unch
+    b3 = b2 + v_noinfo
+    b4 = b3 + v_high_unch
+    b5 = b4 + v_low_unch
+    b6 = b5 + v_high_sig
 
     bar_edge = "#4d4d4d"
     ax.bar(x, v_not_success, color="#f0f0f0", edgecolor=bar_edge, linewidth=0.5)
-    ax.bar(x, v_high_sig, bottom=b2, color=COLOR_SIG, edgecolor=bar_edge, linewidth=0.5)
-    ax.bar(x, v_low_sig, bottom=b3, color=COLOR_SIG, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5)
-    ax.bar(x, v_high_unch, bottom=b4, color=COLOR_UNCH, edgecolor=bar_edge, linewidth=0.5)
-    ax.bar(x, v_low_unch, bottom=b5, color=COLOR_UNCH, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5)
-    ax.bar(x, v_noinfo, bottom=b6, color=COLOR_NOINFO, edgecolor="#7f7f7f", linewidth=0.5)
+    ax.bar(x, v_noinfo, bottom=b2, color=COLOR_NOINFO, edgecolor="#7f7f7f", linewidth=0.5)
+    ax.bar(x, v_high_unch, bottom=b3, color=COLOR_UNCH, edgecolor=bar_edge, linewidth=0.5)
+    ax.bar(x, v_low_unch, bottom=b4, color=COLOR_UNCH, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5)
+    ax.bar(x, v_high_sig, bottom=b5, color=COLOR_SIG, edgecolor=bar_edge, linewidth=0.5)
+    ax.bar(x, v_low_sig, bottom=b6, color=COLOR_SIG, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5)
 
     ax.set_xticks(x)
     labels_display = cts[:5] + ["", ""]
@@ -522,15 +914,41 @@ def _draw_middle_panel_all_clusters(ax: plt.Axes, full_status_df: pd.DataFrame) 
     ax.set_ylim(0, max(POSSIBLE_AS_CLUSTERS, 1) * 1.02)
     ax.set_ylabel("Clusters")
 
+    low_unch_handle = Patch(
+        facecolor=COLOR_UNCH,
+        edgecolor=COLOR_EDGE,
+        linewidth=0.5,
+        label="low confidence splicing unchanged",
+    )
+    low_sig_handle = Patch(
+        facecolor=COLOR_SIG,
+        edgecolor=COLOR_EDGE,
+        linewidth=0.5,
+        label="low confidence differentially spliced",
+    )
+
     legend_handles = [
         Patch(facecolor="#f0f0f0", edgecolor=bar_edge, label="not success"),
         Patch(facecolor=COLOR_NOINFO, edgecolor="#7f7f7f", label="not informative"),
         Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="high confidence splicing unchanged"),
-        Patch(facecolor=COLOR_UNCH, edgecolor=COLOR_EDGE, hatch=LOW_HATCH, label="low confidence splicing unchanged"),
+        low_unch_handle,
         Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="high confidence differentially spliced"),
-        Patch(facecolor=COLOR_SIG, edgecolor=COLOR_EDGE, hatch=LOW_HATCH, label="low confidence differentially spliced"),
+        low_sig_handle,
     ]
-    ax.legend(handles=legend_handles, frameon=False, fontsize=FONT_SIZE, loc="center left", bbox_to_anchor=(1.02, 0.5), ncol=1)
+    ax.legend(
+        handles=legend_handles,
+        handler_map={
+            low_unch_handle: _ThreeDotRectLegendHandler(),
+            low_sig_handle: _ThreeDotRectLegendHandler(),
+        },
+        frameon=False,
+        fontsize=FONT_SIZE,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        ncol=1,
+        handlelength=2.0,
+        handleheight=0.9,
+    )
 
 
 def _cluster_min_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
@@ -599,6 +1017,7 @@ def _draw_upset_from_summary_status(
     summary_df: pd.DataFrame,
     status_label: str,
     max_combinations: int = 36,
+    panel_label: str | None = None,
 ) -> None:
     ct_cols = [ct for ct in CELL_TYPES_UPSET if ct in summary_df.columns]
     intersections = _exclusive_intersections(summary_df, status_label, ct_cols)
@@ -606,6 +1025,8 @@ def _draw_upset_from_summary_status(
     sub = outer_subspec.subgridspec(2, 1, height_ratios=[3, 2], hspace=0.06)
     ax_bar = fig.add_subplot(sub[0])
     ax_mat = fig.add_subplot(sub[1], sharex=ax_bar)
+    if panel_label:
+        _add_panel_label(ax_bar, panel_label)
 
     if not intersections:
         ax_bar.text(0.5, 0.5, "No combinations", ha="center", va="center", transform=ax_bar.transAxes, fontsize=FONT_SIZE)
@@ -618,7 +1039,7 @@ def _draw_upset_from_summary_status(
     counts = [count for _, count in ordered]
     x = np.arange(len(combos))
 
-    ax_bar.bar(x, counts, color="#2b8cbe")
+    ax_bar.bar(x, counts, color=COLOR_UPSET_BAR)
     ax_bar.set_ylabel("Clusters")
     ax_bar.set_ylim(0, max(counts) * 1.18)
     ax_bar.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
@@ -677,10 +1098,14 @@ def build_figure_2() -> None:
     ax_top_hm = fig.add_subplot(left[0, 1], sharey=ax_top_hh)
     ax_top_mm = fig.add_subplot(left[0, 2], sharey=ax_top_hh)
     _draw_top_three_panels([ax_top_hh, ax_top_hm, ax_top_mm])
+    _add_panel_label(ax_top_hh, "A")
+    _add_panel_label(ax_top_hm, "B")
+    _add_panel_label(ax_top_mm, "C")
 
     # Middle stacked percent panel aligned below the middle top segment (HM).
     ax_mid = fig.add_subplot(left[1, 1])
     _draw_middle_panel(ax_mid, full_status_df)
+    _add_panel_label(ax_mid, "D")
 
     # UpSet panels (high confidence only)
     _draw_upset_on_subspec(
@@ -688,21 +1113,45 @@ def build_figure_2() -> None:
         left[2, :],
         full_status_df,
         status_label=STATUS_HIGH_CHANGE,
+        panel_label="E",
     )
     _draw_upset_on_subspec(
         fig,
         left[3, :],
         full_status_df,
         status_label=STATUS_HIGH_CONSERVED,
+        panel_label="F",
     )
 
-    # Side heatmap: top 3 rows only so legend has room below
-    ax_heat = fig.add_subplot(outer[:3, 1])
-    n_keep = _draw_heatmap(ax_heat, full_status_df)
+    # Panel G spans full page height while its panel label remains top-aligned
+    # with A/B/C.
+    ax_heat, n_keep, g_genes = _draw_panel_g_split_heatmaps(
+        fig,
+        outer[:, 1],
+        full_status_df,
+        min_high_cells=3,
+        gene_label_stride=1,
+    )
+    _add_panel_label_aligned_to_top_row(fig, ax_heat, ax_top_hh, "G")
+
+    # Add figure name in lower-left
+    fig.text(
+        0.05,
+        0.02,
+        "Figure 2",
+        fontsize=FONT_SIZE + 4.0,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
+    )
 
     fig.savefig(OUTPUT_PDF, format="pdf", dpi=1200, bbox_inches="tight")
     plt.close("all")
 
+    print(f"Figure 2 panel G: {n_keep} clusters (>=3 immune cells)")
+    print("Figure 2 panel G genes:")
+    for gene in g_genes:
+        print(gene)
     print(f"Saved: {OUTPUT_PDF}")
 
 
@@ -714,10 +1163,19 @@ def build_figure_s1() -> None:
 
     plt.close("all")
     fig = plt.figure(figsize=(8.27, 11.69), constrained_layout=False)
-    grid = GridSpec(
+    outer = GridSpec(
+        4,
+        2,
+        figure=fig,
+        width_ratios=[2.80, 0.50],
+        height_ratios=[1.15, 1.15, 1.15, 1.15],
+        wspace=0.38,
+        hspace=0.34,
+    )
+
+    grid = outer[:, 0].subgridspec(
         4,
         3,
-        figure=fig,
         height_ratios=[1.15, 1.15, 1.15, 1.15],
         wspace=0.14,
         hspace=0.34,
@@ -727,25 +1185,57 @@ def build_figure_s1() -> None:
     ax_top_hm = fig.add_subplot(grid[0, 1], sharey=ax_top_hh)
     ax_top_mm = fig.add_subplot(grid[0, 2], sharey=ax_top_hh)
     _draw_top_three_panels_possible_as([ax_top_hh, ax_top_hm, ax_top_mm])
+    _add_panel_label(ax_top_hh, "A")
+    _add_panel_label(ax_top_hm, "B")
+    _add_panel_label(ax_top_mm, "C")
 
     ax_mid = fig.add_subplot(grid[1, 1])
     _draw_middle_panel_all_clusters(ax_mid, full_status_df)
+    _add_panel_label(ax_mid, "D")
 
     _draw_upset_from_summary_status(
         fig,
         grid[2, :],
         a_only_summary_df,
         status_label="sig",
+        panel_label="E",
     )
     _draw_upset_from_summary_status(
         fig,
         grid[3, :],
         a_only_summary_df,
         status_label="unchanged",
+        panel_label="F",
+    )
+
+    # S1 panel G spans full page height while its panel label remains
+    # top-aligned with A/B/C.
+    ax_heat_s1, n_keep_s1, g_genes_s1 = _draw_panel_g_split_heatmaps(
+        fig,
+        outer[:, 1],
+        full_status_df,
+        min_high_cells=1,
+        max_high_cells=2,
+    )
+    _add_panel_label_aligned_to_top_row(fig, ax_heat_s1, ax_top_hh, "G")
+
+    # Add figure name in lower-left
+    fig.text(
+        0.05,
+        0.02,
+        "Figure S1",
+        fontsize=FONT_SIZE + 4.0,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
     )
 
     fig.savefig(OUTPUT_S1_PDF, format="pdf", dpi=1200, bbox_inches="tight")
     plt.close("all")
+    print(f"Figure S1 panel G: {n_keep_s1} clusters (1-2 immune cells)")
+    print("Figure S1 panel G genes:")
+    for gene in g_genes_s1:
+        print(gene)
     print(f"Saved: {OUTPUT_S1_PDF}")
 
 
