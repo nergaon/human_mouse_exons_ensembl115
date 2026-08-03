@@ -32,15 +32,19 @@ GENE_TABLE_FIBRO = BASE / "leafcutter_EMTAB5919H_EMTAB5919M" / "clusters_sum_tab
 OUTPUT_DIR = BASE / "genes_figs_selected_clusters"
 
 TARGET_CLUSTERS = [
-    "chr21:clu_46835",
-    "chr9:clu_81561",
-    "chr9:clu_80597",
-    "chr8:clu_76270",
-    "clur3:clu_57873",
-    "chr6:clu_68620",
-    "chr3:clu_60710",
-    "chr3:clu_60717",
-    "chr14:clu_15672"
+    #"chr21:clu_46835",
+    #"chr9:clu_81561",
+    #"chr9:clu_80597",
+    #"chr8:clu_76270",
+    #"clur3:clu_57873",
+    #"chr6:clu_68620",
+    #"chr3:clu_60710",
+    #"chr3:clu_60717",
+    #"chr14:clu_15672",
+    #"chr3:clu_56081",
+    #"chr1:clu_39954",
+    #"chr20:clu_46642",
+    "chr4:clu_62944"
 ]
 
 CELL_GROUP_ORDER = ["CD4", "CD8", "NveB", "NK", "Mono", "Fibroblast"]

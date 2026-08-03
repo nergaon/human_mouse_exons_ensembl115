@@ -35,7 +35,9 @@ LEAFCUTTER_DIR = BASE / "leafcutter_GSE115736_GSE116177"
 HN6_XLSX = LEAFCUTTER_DIR / "unique_sig_clusters_HN6.xlsx"
 OUTPUT_PDF = BASE / "figure_2.pdf"
 OUTPUT_S1_PDF = BASE / "figrue_S1.pdf"
+OUTPUT_S5_PDF = BASE / "figure_S5.pdf"
 FILE_A = LEAFCUTTER_DIR / "clusters_sum_table_HN6.txt"
+HH_ARTICLE_XLSX = BASE / "human_human_article" / "junction_comparison_old_vs_new_project_HN4.xlsx"
 POSSIBLE_AS_CLUSTERS = 1823
 
 PAIR_DIRS: list[tuple[str, str, Path]] = [
@@ -231,14 +233,74 @@ def _read_pair_sum_table_all_cells(sum_table: Path) -> dict[str, dict[str, float
     return _read_pair_sum_table(sum_table, ordered_cells)
 
 
-def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
-    """Recreate the HH/HM/MM top panel from merge_leafcutter_results logic."""
+def _annotate_stacked_bar_counts(
+    ax: plt.Axes,
+    x: np.ndarray,
+    heights_by_stack: list[list[float]],
+    counts_by_stack: list[list[float]],
+) -> None:
+    bottoms = np.zeros(len(x), dtype=float)
+    for heights, counts in zip(heights_by_stack, counts_by_stack):
+        for idx, (height, count) in enumerate(zip(heights, counts)):
+            if count <= 0 or height <= 0:
+                continue
+            ax.text(
+                x[idx],
+                bottoms[idx] + (height / 2.0),
+                str(int(round(count))),
+                ha="center",
+                va="center",
+                fontsize=max(5.0, FONT_SIZE - 1.0),
+            )
+        bottoms += np.asarray(heights, dtype=float)
+
+
+def _draw_top_panel_from_summary(
+    ax: plt.Axes,
+    summary_by_cell: dict[str, dict[str, float]],
+    display_cell_types: list[str],
+    display_labels: list[str],
+    rotate_xticks: bool,
+) -> None:
     colors = {
         "not_informative": COLOR_NOINFO,
         "unchanged": COLOR_UNCH,
         "sig_dpsi_01": COLOR_SIG,
     }
 
+    success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
+    sig_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
+    unchanged_vals = [summary_by_cell[ct]["unchanged"] for ct in display_cell_types]
+    noinfo_vals = [summary_by_cell[ct]["not_informative"] for ct in display_cell_types]
+
+    noinfo_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(noinfo_vals, success_vals)]
+    unchanged_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(unchanged_vals, success_vals)]
+    sig_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig_vals, success_vals)]
+    bottom_sig = [a + b for a, b in zip(noinfo_pct, unchanged_pct)]
+
+    x = np.arange(len(display_cell_types))
+    ax.bar(x, noinfo_pct, color=colors["not_informative"])
+    ax.bar(x, unchanged_pct, bottom=noinfo_pct, color=colors["unchanged"])
+    ax.bar(x, sig_pct, bottom=bottom_sig, color=colors["sig_dpsi_01"])
+    _annotate_stacked_bar_counts(
+        ax,
+        x,
+        [noinfo_pct, unchanged_pct, sig_pct],
+        [noinfo_vals, unchanged_vals, sig_vals],
+    )
+
+    ax.set_xticks(x)
+    rotation = 35 if rotate_xticks else 0
+    ha = "right" if rotate_xticks else "center"
+    ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
+    ax.tick_params(axis="x", pad=1.5, length=0)
+    ax.margins(x=0.0)
+    ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
+    ax.set_ylim(0, 100)
+
+
+def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
+    """Recreate the HH/HM/MM top panel from merge_leafcutter_results logic."""
     panel_cell_orders = [
         CELL_TYPES_UPSET,
         CELL_TYPES_UPSET + ["Neut", "Fibroblast"],
@@ -266,30 +328,13 @@ def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
 
         display_cell_types = [ct for ct in panel_cell_orders[panel_idx] if ct in summary_by_cell]
         display_labels = panel_display_labels[panel_idx][: len(display_cell_types)]
-
-        success_vals = [summary_by_cell[ct]["success"] for ct in display_cell_types]
-        sig_vals = [summary_by_cell[ct]["sig_dpsi_01"] for ct in display_cell_types]
-        unchanged_vals = [summary_by_cell[ct]["unchanged"] for ct in display_cell_types]
-        noinfo_vals = [summary_by_cell[ct]["not_informative"] for ct in display_cell_types]
-
-        noinfo_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(noinfo_vals, success_vals)]
-        unchanged_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(unchanged_vals, success_vals)]
-        sig_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(sig_vals, success_vals)]
-        bottom_sig = [a + b for a, b in zip(noinfo_pct, unchanged_pct)]
-
-        x = np.arange(len(display_cell_types))
-        ax.bar(x, noinfo_pct, color=colors["not_informative"])
-        ax.bar(x, unchanged_pct, bottom=noinfo_pct, color=colors["unchanged"])
-        ax.bar(x, sig_pct, bottom=bottom_sig, color=colors["sig_dpsi_01"])
-
-        ax.set_xticks(x)
-        rotation = 35 if panel_idx == 1 else 0
-        ha = "right" if panel_idx == 1 else "center"
-        ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
-        ax.tick_params(axis="x", pad=1.5, length=0)
-        ax.margins(x=0.0)
-        ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
-        ax.set_ylim(0, 100)
+        _draw_top_panel_from_summary(
+            ax,
+            summary_by_cell,
+            display_cell_types,
+            display_labels,
+            rotate_xticks=(panel_idx == 1),
+        )
 
     axes[0].set_ylabel("Comparable alternative splicing events")
     for idx, ax in enumerate(axes):
@@ -975,6 +1020,125 @@ def _draw_middle_panel_all_clusters(ax: plt.Axes, full_status_df: pd.DataFrame) 
     )
 
 
+def _read_hh_article_good_cluster_summary() -> pd.DataFrame:
+    if not HH_ARTICLE_XLSX.exists():
+        raise FileNotFoundError(f"Missing input Excel file: {HH_ARTICLE_XLSX}")
+
+    df = pd.read_excel(HH_ARTICLE_XLSX, sheet_name="Per-cluster summary")
+    flag_col = "Good cluster? (>=2 matched junctions, sharing a splice site)"
+    if flag_col not in df.columns:
+        raise ValueError(f"Sheet 'Per-cluster summary' must include '{flag_col}'")
+
+    keep = df[flag_col].fillna("").astype(str).str.strip().str.lower().eq("yes")
+    df = df.loc[keep].copy()
+    if df.empty:
+        raise ValueError("No rows marked 'Yes' were found in Per-cluster summary column E")
+    return df
+
+
+def _draw_hh_article_panel_b_style(ax: plt.Axes, summary_df: pd.DataFrame) -> None:
+    cell_types = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"]
+    display_labels = [CELL_TYPE_DISPLAY.get(ct, ct) for ct in cell_types[:5]] + ["", "Fibroblasts"]
+
+    success_vals: list[float] = []
+    ds_vals: list[float] = []
+    su_vals: list[float] = []
+    noinfo_vals: list[float] = []
+
+    for ct in cell_types:
+        if ct == "Neut":
+            success_vals.append(0.0)
+            ds_vals.append(0.0)
+            su_vals.append(0.0)
+            noinfo_vals.append(0.0)
+            continue
+
+        status_col = f"{ct} status (DS/SU)"
+        if status_col not in summary_df.columns:
+            raise ValueError(f"Missing expected column: {status_col}")
+
+        status = summary_df[status_col].fillna("").astype(str).str.strip()
+        success = (~status.str.lower().eq("not success")).sum()
+        success_vals.append(float(success))
+        ds_vals.append(float(status.eq("DS").sum()))
+        su_vals.append(float(status.eq("SU").sum()))
+        noinfo_vals.append(float(status.str.lower().eq("not informative").sum()))
+
+    ds_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(ds_vals, success_vals)]
+    su_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(su_vals, success_vals)]
+    noinfo_pct = [((v / s) * 100.0) if s > 0 else 0.0 for v, s in zip(noinfo_vals, success_vals)]
+    bottom_ds = [a + b for a, b in zip(noinfo_pct, su_pct)]
+
+    x = np.arange(len(cell_types))
+    ax.bar(x, noinfo_pct, color=COLOR_NOINFO)
+    ax.bar(x, su_pct, bottom=noinfo_pct, color=COLOR_UNCH)
+    ax.bar(x, ds_pct, bottom=bottom_ds, color=COLOR_SIG)
+    _annotate_stacked_bar_counts(
+        ax,
+        x,
+        [noinfo_pct, su_pct, ds_pct],
+        [noinfo_vals, su_vals, ds_vals],
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(display_labels, rotation=35, ha="right")
+    ax.tick_params(axis="x", pad=1.5, length=0)
+    ax.margins(x=0.0)
+    ax.set_xlim(-0.5, len(cell_types) - 0.5)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Comparable alternative splicing events")
+
+    legend_handles = [
+        Patch(facecolor=COLOR_NOINFO, edgecolor=COLOR_EDGE, label="Not informative"),
+        Patch(facecolor=COLOR_UNCH, edgecolor=COLOR_EDGE, label="Splicing unchanged"),
+        Patch(facecolor=COLOR_SIG, edgecolor=COLOR_EDGE, label="Differentially spliced"),
+    ]
+    ax.legend(handles=legend_handles, frameon=False, fontsize=FONT_SIZE, loc="center left", bbox_to_anchor=(1.02, 0.5))
+
+
+def build_figure_s5() -> None:
+    """Build supplemental figure S5 from the old-vs-new human-human cluster summary."""
+    _configure_style()
+    summary_df = _read_hh_article_good_cluster_summary()
+    hm_summary_by_cell = _read_pair_sum_table(PAIR_DIRS[1][2], CELL_TYPES_UPSET + ["Neut", "Fibroblast"])
+    if "Neut" in hm_summary_by_cell:
+        hm_summary_by_cell["Neut"] = {
+            "success": 0.0,
+            "sig_dpsi_01": 0.0,
+            "unchanged": 0.0,
+            "not_informative": 0.0,
+        }
+
+    plt.close("all")
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(8.27, 3.2), constrained_layout=True)
+    _draw_top_panel_from_summary(
+        ax_left,
+        hm_summary_by_cell,
+        [ct for ct in CELL_TYPES_UPSET + ["Neut", "Fibroblast"] if ct in hm_summary_by_cell],
+        [CELL_TYPE_DISPLAY.get(ct, ct) for ct in CELL_TYPES_UPSET] + ["", "Fibroblasts"],
+        rotate_xticks=True,
+    )
+    ax_left.set_ylabel("Comparable alternative splicing events")
+    _draw_hh_article_panel_b_style(ax_right, summary_df)
+    _add_panel_label(ax_left, "A")
+    _add_panel_label(ax_right, "B")
+
+    fig.text(
+        0.02,
+        0.02,
+        "Figure S5",
+        fontsize=FONT_SIZE + 2.0,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
+    )
+
+    fig.savefig(OUTPUT_S5_PDF, format="pdf", dpi=1200, bbox_inches="tight")
+    plt.close("all")
+    print(f"Figure S5: {len(summary_df)} good clusters from Per-cluster summary")
+    print(f"Saved: {OUTPUT_S5_PDF}")
+
+
 def _cluster_min_padj_lookup(df: pd.DataFrame, prefix: str) -> pd.Series:
     col = f"{prefix}_p.adjust"
     if col not in df.columns:
@@ -1267,6 +1431,7 @@ def build_figure_s1() -> None:
 def main() -> None:
     build_figure_2()
     build_figure_s1()
+    build_figure_s5()
 
 
 if __name__ == "__main__":

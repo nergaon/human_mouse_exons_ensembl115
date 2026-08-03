@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-GO Biological Process 2025 enrichment across all requested cell types.
+GO Biological Process 2025 enrichment for one global SU list and one global DS list.
 
 Uses a single workbook:
     unique_sig_clusters_HN6.xlsx (sheet: all_cluster_status)
 
-For each cell type, gene lists are built from status labels:
-    - splicing unchanged
-    - differentially spliced
+Gene lists are built across the requested immune cell types:
+    - SU: genes seen only in splicing unchanged rows
+    - DS: genes seen only in differentially spliced rows
 
 Background genes are taken from all rows of column B (genes) in
 all_cluster_status.
@@ -16,7 +16,6 @@ all_cluster_status.
 from __future__ import annotations
 
 from pathlib import Path
-import json
 import multiprocessing as mp
 import re
 import math
@@ -35,6 +34,13 @@ THRESHOLD = 0.05
 ENRICHR_TIMEOUT_SEC = 180
 GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025", "hallmark", "Reactome_2022")
 
+MSIGDB_LIBRARY_CATEGORY: dict[str, str] = {
+    "GO_Biological_Process_2025": "c5.go.bp",
+    "hallmark": "h.all",
+    "Reactome_2022": "c2.cp.reactome",
+}
+MSIGDB_DB_VERSION = "2024.1.Hs"
+
 REQUESTED_CELL_TYPES: tuple[str, ...] = (
     "CD4T",
     "CD8T",
@@ -51,18 +57,14 @@ CELL_TYPE_CANDIDATES: dict[str, tuple[str, ...]] = {
     "NveB": ("NveB", "BCell"),
     "NK": ("NK",),
     "Mono": ("Mono",),
-    "Fibroblast": ("Fibroblast", "Fibroblasts", "fibroblast", "fibroblasts"),
-    "Neu": ("Neu", "Neut", "Neutrophils"),
 }
 
 CELL_TYPE_DISPLAY: dict[str, str] = {
     "CD4T": "CD4T",
     "CD8T": "CD8T",
-    "NveB": "NaveB",
+    "NveB": "B",
     "NK": "NK",
     "Mono": "Mono",
-    "Fibroblast": "Fibroblast",
-    "Neu": "Neu",
 }
 
 
@@ -110,52 +112,55 @@ def genes_series_to_set(genes_series: pd.Series) -> set[str]:
     return out
 
 
+def split_result_genes(genes_text: object) -> list[str]:
+    text = str(genes_text).strip()
+    if not text or text.lower() == "nan":
+        return []
+    parts = re.split(r"[;,|]", text)
+    genes: list[str] = []
+    for p in parts:
+        g = p.strip()
+        if g and g.lower() != "nan":
+            genes.append(g)
+    return genes
+
+
+def join_genes(genes: set[str]) -> str:
+    return ";".join(sorted(genes))
+
+
 def _status_mask(status_series: pd.Series, keyword: str) -> pd.Series:
     s = status_series.fillna("").astype(str).str.strip().str.lower()
     return s.str.contains(keyword, regex=False)
-
-
-def write_gene_list(path: Path, genes: set[str]) -> None:
-    path.write_text("\n".join(sorted(genes)) + ("\n" if genes else ""))
 
 
 def _go_worker(
     genes: list[str],
     background: list[str],
     library: str,
-    run_dir: str,
     out_tsv: str,
     queue: mp.Queue,
 ) -> None:
     try:
         import gseapy as gp
 
-        # Handle Hallmark via Msigdb
-        if library.lower() == "hallmark":
-            try:
-                msig = Msigdb()
-                gmt = msig.get_gmt(category="h.all", dbver="2024.1.Hs")
-                results = gp.enrich(
-                    gene_list=genes,
-                    gene_sets=gmt,
-                    background=background,
-                    outdir=None,
-                )
-            except Exception as exc:
-                queue.put({"status": "error", "message": f"Hallmark loading failed: {str(exc)}"})
-                return
-        else:
-            # Handle other libraries via Enrichr
-            enr = gp.enrichr(
+        category = MSIGDB_LIBRARY_CATEGORY.get(library)
+        if category is None:
+            queue.put({"status": "error", "message": f"Unsupported library: {library}"})
+            return
+
+        try:
+            msig = Msigdb()
+            gmt = msig.get_gmt(category=category, dbver=MSIGDB_DB_VERSION)
+            results = gp.enrich(
                 gene_list=genes,
-                gene_sets=library,
-                organism="human",
-                outdir=None,
+                gene_sets=gmt,
                 background=background,
-                cutoff=1.0,
-                no_plot=True,
+                outdir=None,
             )
-            results = enr
+        except Exception as exc:
+            queue.put({"status": "error", "message": f"{library} loading failed: {str(exc)}"})
+            return
 
         result_df = getattr(results, "results", None)
         if not isinstance(result_df, pd.DataFrame):
@@ -188,27 +193,27 @@ def _go_worker(
 
 
 def run_go_with_background(label: str, genes: set[str], background: set[str], library: str, out_dir: Path) -> None:
-    run_dir = out_dir / label
-    run_dir.mkdir(parents=True, exist_ok=True)
-    for stale_name in (
-        "ERROR_missing_gseapy.txt",
-        "ERROR_go_request_failed.txt",
-        "ERROR_go_timeout.txt",
-        "NO_ENRICHMENT_RESULTS.txt",
-        "EMPTY_GENE_LIST.txt",
-    ):
-        stale_path = run_dir / stale_name
+    # Keep all status/error artifacts as flat files in OUT_DIR to avoid creating
+    # per-run folders that are often empty.
+    stale_paths = [
+        out_dir / f"{label}.ERROR_missing_gseapy.txt",
+        out_dir / f"{label}.ERROR_go_request_failed.txt",
+        out_dir / f"{label}.ERROR_go_timeout.txt",
+        out_dir / f"{label}.NO_ENRICHMENT_RESULTS.txt",
+        out_dir / f"{label}.EMPTY_GENE_LIST.txt",
+    ]
+    for stale_path in stale_paths:
         if stale_path.exists():
             stale_path.unlink()
 
     if not genes:
-        (run_dir / "EMPTY_GENE_LIST.txt").write_text("No genes in this list.\n")
+        (out_dir / f"{label}.EMPTY_GENE_LIST.txt").write_text("No genes in this list.\n")
         return
 
     try:
         import gseapy  # noqa: F401  # pre-check dependency before launching subprocess
     except Exception as exc:
-        (run_dir / "ERROR_missing_gseapy.txt").write_text(
+        (out_dir / f"{label}.ERROR_missing_gseapy.txt").write_text(
             "gseapy is required for enrichment. Install with: pip install gseapy\n"
             f"Import error: {exc}\n"
         )
@@ -216,9 +221,12 @@ def run_go_with_background(label: str, genes: set[str], background: set[str], li
 
     queue: mp.Queue = mp.Queue()
     out_tsv = out_dir / f"{label}{ENRICHMENT_FILE_SUFFIX}"
+    # Avoid carrying over old enrichment tables when a new run fails or times out.
+    if out_tsv.exists():
+        out_tsv.unlink()
     proc = mp.Process(
         target=_go_worker,
-        args=(sorted(genes), sorted(background), library, str(run_dir), str(out_tsv), queue),
+        args=(sorted(genes), sorted(background), library, str(out_tsv), queue),
         daemon=True,
     )
     proc.start()
@@ -227,14 +235,14 @@ def run_go_with_background(label: str, genes: set[str], background: set[str], li
     if proc.is_alive():
         proc.terminate()
         proc.join()
-        (run_dir / "ERROR_go_timeout.txt").write_text(
+        (out_dir / f"{label}.ERROR_go_timeout.txt").write_text(
             "GO request timed out and was terminated.\n"
             f"Timeout: {ENRICHR_TIMEOUT_SEC} seconds\n"
         )
         return
 
     if queue.empty():
-        (run_dir / "ERROR_go_request_failed.txt").write_text(
+        (out_dir / f"{label}.ERROR_go_request_failed.txt").write_text(
             "GO process exited without returning a result.\n"
         )
         return
@@ -244,10 +252,10 @@ def run_go_with_background(label: str, genes: set[str], background: set[str], li
     if status == "ok":
         return
     if status == "empty":
-        (run_dir / "NO_ENRICHMENT_RESULTS.txt").write_text("No terms returned by Enrichr.\n")
+        (out_dir / f"{label}.NO_ENRICHMENT_RESULTS.txt").write_text("No enrichment terms were returned.\n")
     else:
-        (run_dir / "ERROR_go_request_failed.txt").write_text(
-            "GO request failed (likely no network access to Enrichr).\n"
+        (out_dir / f"{label}.ERROR_go_request_failed.txt").write_text(
+            "GO request failed while loading or evaluating the requested gene set library.\n"
             f"Error: {result.get('message', 'Unknown error')}\n"
         )
 
@@ -277,6 +285,7 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
         pval_col = _first_existing_col(df, ["P-value", "P value", "p_value", "pval", "PValue"])
         fdr_col = _first_existing_col(df, ["Adjusted P-value", "Adjusted P value", "adj_p", "FDR", "fdr", "p_value"])
         enr_col = _first_existing_col(df, ["Odds Ratio", "Odds_Ratio", "odds_ratio", "Enrichment Ratio", "enrichment_ratio"])
+        term_genes_col = _first_existing_col(df, ["Genes", "genes", "Lead_genes", "lead_genes"])
 
         if term_col is None:
             continue
@@ -288,6 +297,8 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
             use_cols.append(fdr_col)
         if enr_col:
             use_cols.append(enr_col)
+        if term_genes_col and term_genes_col not in use_cols:
+            use_cols.append(term_genes_col)
 
         tmp = df[use_cols].copy()
         if pval_col:
@@ -314,19 +325,32 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
             tmp[enr_col] = pd.to_numeric(tmp[enr_col], errors="coerce")
             enr_use = enr_col
 
+        if term_genes_col is None:
+            tmp["_term_genes"] = ""
+            term_genes_use = "_term_genes"
+        else:
+            tmp[term_genes_col] = tmp[term_genes_col].fillna("").astype(str)
+            term_genes_use = term_genes_col
+
         for _, row in tmp.iterrows():
             enr_val = row[enr_use]
             if pd.notna(enr_val) and isinstance(enr_val, (int, float)) and not math.isfinite(float(enr_val)):
                 continue
+            term_genes = split_result_genes(row[term_genes_use])
             out_rows.append(
                 {
                     "library": meta["library"],
                     "cell_type": meta["cell_type"],
                     "type_of_list": meta["type_of_list"],
+                    "background_gene_count": meta["background_gene_count"],
+                    "list_gene_count": meta["list_gene_count"],
+                    "list_genes": meta["list_genes"],
                     "go_term": row[term_col],
                     "p_value": row[pval_col],
                     "enrichment_ratio": enr_val,
                     "source_fdr": row[fdr_col],
+                    "term_genes": ";".join(term_genes),
+                    "term_genes_count": len(set(term_genes)),
                 }
             )
 
@@ -336,10 +360,15 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
                 "library",
                 "cell_type",
                 "type_of_list",
+                "background_gene_count",
+                "list_gene_count",
+                "list_genes",
                 "go_term",
                 "p_value",
                 "enrichment_ratio",
                 "source_fdr",
+                "term_genes",
+                "term_genes_count",
             ]
         )
 
@@ -385,30 +414,46 @@ def apply_library_specific_fdr(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _collect_run_errors(rows_meta: list[dict[str, str]], out_dir: Path) -> list[str]:
+def _collect_run_errors(rows_meta: list[dict[str, object]], out_dir: Path) -> list[str]:
     errors: list[str] = []
     for meta in rows_meta:
-        run_dir = out_dir / meta["label"]
-        for err_name in ("ERROR_missing_gseapy.txt", "ERROR_go_request_failed.txt", "ERROR_go_timeout.txt"):
-            err_path = run_dir / err_name
+        label = str(meta["label"])
+        for suffix in (
+            "ERROR_missing_gseapy.txt",
+            "ERROR_go_request_failed.txt",
+            "ERROR_go_timeout.txt",
+        ):
+            err_path = out_dir / f"{label}.{suffix}"
             if err_path.exists():
                 try:
                     msg = err_path.read_text().strip().replace("\n", " | ")
                 except Exception:
                     msg = "(could not read error file)"
-                errors.append(f"{meta['label']}: {msg}")
+                errors.append(f"{label}: {msg}")
                 break
     return errors
 
 
-def write_gene_lists_to_excel(excel_path: Path, gene_lists: dict[str, set[str]]) -> None:
-    """Write all gene lists to an Excel file, one sheet per list."""
+def write_gene_lists_to_excel(
+    excel_path: Path,
+    background_genes: set[str],
+    su_genes: set[str],
+    ds_genes: set[str],
+) -> None:
+    """Write one workbook with the 3 requested global lists."""
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-        for sheet_name, genes in sorted(gene_lists.items()):
-            # Excel sheet names have a 31-character limit; truncate if necessary
-            safe_sheet_name = sheet_name[:31] if len(sheet_name) <= 31 else sheet_name[:28] + "..."
-            df = pd.DataFrame({"gene": sorted(genes)}) if genes else pd.DataFrame(columns=["gene"])
-            df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+        pd.DataFrame({"gene": sorted(background_genes)}).to_excel(writer, sheet_name="back_gound", index=False)
+        pd.DataFrame({"gene": sorted(su_genes)}).to_excel(writer, sheet_name="SU", index=False)
+        pd.DataFrame({"gene": sorted(ds_genes)}).to_excel(writer, sheet_name="DS", index=False)
+
+
+def write_library_result_workbook(excel_path: Path, table: pd.DataFrame) -> None:
+    """Write one workbook for a single library with DS and SU sheets."""
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        for list_type in ("DS", "SU"):
+            list_df = table[table["type_of_list"] == list_type].copy()
+            list_df = list_df.sort_values(["fdr", "p_value", "go_term"], kind="stable")
+            list_df.to_excel(writer, sheet_name=list_type, index=False)
 
 
 def main() -> None:
@@ -431,10 +476,8 @@ def main() -> None:
     background_genes = genes_series_to_set(df_status[genes_col])
     all_diff_genes: set[str] = set()
     all_unchanged_genes: set[str] = set()
-    primary_diff_genes_any: set[str] = set()
-    primary_unchanged_genes_any: set[str] = set()
 
-    rows_meta: list[dict[str, str]] = []
+    rows_meta: list[dict[str, object]] = []
     summary: dict[str, object] = {}
 
     for ct, status_col in cell_type_columns:
@@ -445,41 +488,6 @@ def main() -> None:
         diff_genes = genes_series_to_set(df_status.loc[diff_mask, genes_col])
         all_diff_genes.update(diff_genes)
         all_unchanged_genes.update(unchanged_genes)
-        if ct in PRIMARY_IMMUNE_CELL_TYPES:
-            primary_diff_genes_any.update(diff_genes)
-            primary_unchanged_genes_any.update(unchanged_genes)
-
-        ct_dir = OUT_DIR / ct
-        ct_dir.mkdir(parents=True, exist_ok=True)
-        write_gene_list(ct_dir / "background_genes_all_cluster_status_colB.txt", background_genes)
-        write_gene_list(ct_dir / "differentially_spliced.txt", diff_genes)
-        write_gene_list(ct_dir / "splicing_unchanged.txt", unchanged_genes)
-
-        for library in GO_LIBRARIES:
-            label_diff = f"{ct}_differentially_spliced_{library}"
-            label_unchanged = f"{ct}_splicing_unchanged_{library}"
-
-            print(f"[{ct}] Running {library} enrichment for differentially spliced", flush=True)
-            run_go_with_background(label_diff, diff_genes, background_genes, library, OUT_DIR)
-            print(f"[{ct}] Running {library} enrichment for splicing unchanged", flush=True)
-            run_go_with_background(label_unchanged, unchanged_genes, background_genes, library, OUT_DIR)
-
-            rows_meta.append(
-                {
-                    "label": label_diff,
-                    "library": library,
-                    "cell_type": CELL_TYPE_DISPLAY.get(ct, ct),
-                    "type_of_list": "differentially spliced",
-                }
-            )
-            rows_meta.append(
-                {
-                    "label": label_unchanged,
-                    "library": library,
-                    "cell_type": CELL_TYPE_DISPLAY.get(ct, ct),
-                    "type_of_list": "splicing unchanged",
-                }
-            )
 
         summary[ct] = {
             "background_genes_all_cluster_status_colB": len(background_genes),
@@ -489,56 +497,38 @@ def main() -> None:
             "splicing_unchanged_genes": len(unchanged_genes),
         }
 
-    (OUT_DIR / "summary_counts.json").write_text(json.dumps(summary, indent=2) + "\n")
-    write_gene_list(OUT_DIR / "all_differentially_spliced_genes.txt", all_diff_genes)
-    write_gene_list(OUT_DIR / "all_splicing_unchanged_genes.txt", all_unchanged_genes)
-    primary_diff_only_genes = primary_diff_genes_any - primary_unchanged_genes_any
-    primary_unchanged_only_genes = primary_unchanged_genes_any - primary_diff_genes_any
-    write_gene_list(
-        OUT_DIR / "genes_diff_in_any_CD4T_CD8T_NveB_NK_Mono_but_never_unchanged.txt",
-        primary_diff_only_genes,
-    )
-    write_gene_list(
-        OUT_DIR / "genes_unchanged_in_any_CD4T_CD8T_NveB_NK_Mono_but_never_diff.txt",
-        primary_unchanged_only_genes,
-    )
-
-    primary_combined_label = "CD4T_CD8T_NveB_NK_Mono"
-    combined_dir = OUT_DIR / primary_combined_label
-    combined_dir.mkdir(parents=True, exist_ok=True)
-    write_gene_list(combined_dir / "background_genes_all_cluster_status_colB.txt", background_genes)
-    write_gene_list(combined_dir / "diff_in_any_but_never_unchanged.txt", primary_diff_only_genes)
-    write_gene_list(combined_dir / "unchanged_in_any_but_never_diff.txt", primary_unchanged_only_genes)
+    ds_genes = all_diff_genes - all_unchanged_genes
+    su_genes = all_unchanged_genes - all_diff_genes
 
     for library in GO_LIBRARIES:
-        label_diff_only = f"{primary_combined_label}_diff_in_any_but_never_unchanged_{library}"
-        label_unchanged_only = f"{primary_combined_label}_unchanged_in_any_but_never_diff_{library}"
+        ds_label = f"all_differentially_spliced_{library}"
+        su_label = f"all_splicing_unchanged_{library}"
 
-        print(
-            f"[{primary_combined_label}] Running {library} enrichment for diff-in-any but never-unchanged",
-            flush=True,
-        )
-        run_go_with_background(label_diff_only, primary_diff_only_genes, background_genes, library, OUT_DIR)
-        print(
-            f"[{primary_combined_label}] Running {library} enrichment for unchanged-in-any but never-diff",
-            flush=True,
-        )
-        run_go_with_background(label_unchanged_only, primary_unchanged_only_genes, background_genes, library, OUT_DIR)
+        print(f"[global] Running {library} enrichment for DS", flush=True)
+        run_go_with_background(ds_label, ds_genes, background_genes, library, OUT_DIR)
+        print(f"[global] Running {library} enrichment for SU", flush=True)
+        run_go_with_background(su_label, su_genes, background_genes, library, OUT_DIR)
 
         rows_meta.append(
             {
-                "label": label_diff_only,
+                "label": ds_label,
                 "library": library,
-                "cell_type": primary_combined_label,
-                "type_of_list": "diff in any, never unchanged",
+                "cell_type": "all",
+                "type_of_list": "DS",
+                "background_gene_count": len(background_genes),
+                "list_gene_count": len(ds_genes),
+                "list_genes": join_genes(ds_genes),
             }
         )
         rows_meta.append(
             {
-                "label": label_unchanged_only,
+                "label": su_label,
                 "library": library,
-                "cell_type": primary_combined_label,
-                "type_of_list": "unchanged in any, never diff",
+                "cell_type": "all",
+                "type_of_list": "SU",
+                "background_gene_count": len(background_genes),
+                "list_gene_count": len(su_genes),
+                "list_genes": join_genes(su_genes),
             }
         )
 
@@ -558,97 +548,47 @@ def main() -> None:
         kind="stable",
     ).reset_index(drop=True)
 
-    combined_all_tsv = OUT_DIR / "all_libraries_2023_2025_all_terms_table.tsv"
-    combined_all_csv = OUT_DIR / "all_libraries_2023_2025_all_terms_table.csv"
-    final_all_table.to_csv(combined_all_tsv, sep="\t", index=False)
-    final_all_table.to_csv(combined_all_csv, index=False)
+    # Exactly 3 result files: one per dataset/library, each containing FDR.
+    library_output_names = {
+        "GO_Biological_Process_2025": "results_go_biological_process_2025.tsv",
+        "hallmark": "results_hallmark.tsv",
+        "Reactome_2022": "results_reactome_2022.tsv",
+    }
+    for library, out_name in library_output_names.items():
+        lib_df = final_all_table[final_all_table["library"] == library].copy()
+        lib_df = lib_df.sort_values(["fdr", "p_value", "cell_type", "type_of_list", "go_term"], kind="stable")
+        lib_df.to_csv(OUT_DIR / out_name, sep="\t", index=False)
 
-    final_sig_table = final_all_table[pd.to_numeric(final_all_table["fdr"], errors="coerce") <= THRESHOLD].copy()
-    combined_sig_tsv = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.tsv"
-    combined_sig_csv = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.csv"
-    final_sig_table.to_csv(combined_sig_tsv, sep="\t", index=False)
-    final_sig_table.to_csv(combined_sig_csv, index=False)
+        lib_stem = out_name.replace("results_", "").replace(".tsv", "")
+        for stale_path in (
+            OUT_DIR / f"results_{lib_stem}_DS_only.tsv",
+            OUT_DIR / f"results_{lib_stem}_SU_only.tsv",
+        ):
+            if stale_path.exists():
+                stale_path.unlink()
+        write_library_result_workbook(OUT_DIR / f"results_{lib_stem}.xlsx", lib_df)
 
-    go_library_name = "GO_Biological_Process_2025"
-    go_all_table = final_all_table[final_all_table["library"] == go_library_name].copy()
-    go_sig_table = final_sig_table[final_sig_table["library"] == go_library_name].copy()
-
-    final_all_tsv = OUT_DIR / "go_bp_2023_2025_all_terms_table.tsv"
-    final_all_csv = OUT_DIR / "go_bp_2023_2025_all_terms_table.csv"
-    go_all_table.to_csv(final_all_tsv, sep="\t", index=False)
-    go_all_table.to_csv(final_all_csv, index=False)
-
-    final_sig_tsv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.tsv"
-    final_sig_csv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.csv"
-    go_sig_table.to_csv(final_sig_tsv, sep="\t", index=False)
-    go_sig_table.to_csv(final_sig_csv, index=False)
-
-    for library in GO_LIBRARIES:
-        lib_all = final_all_table[final_all_table["library"] == library].copy()
-        lib_sig = final_sig_table[final_sig_table["library"] == library].copy()
-        lib_stem = library.lower().replace(" ", "_")
-
-        lib_all.to_csv(OUT_DIR / f"{lib_stem}_all_terms_table.tsv", sep="\t", index=False)
-        lib_all.to_csv(OUT_DIR / f"{lib_stem}_all_terms_table.csv", index=False)
-        lib_sig.to_csv(OUT_DIR / f"{lib_stem}_significant_terms_table.tsv", sep="\t", index=False)
-        lib_sig.to_csv(OUT_DIR / f"{lib_stem}_significant_terms_table.csv", index=False)
-
-    if not final_sig_table.empty:
-        sig_counts = (
-            final_sig_table.groupby(["library", "cell_type", "type_of_list"], as_index=False)
-            .size()
-            .rename(columns={"size": "n_significant_terms_fdr_le_0_05"})
-            .sort_values(["library", "cell_type", "type_of_list"], kind="stable")
-        )
-    else:
-        sig_counts = pd.DataFrame(
-            columns=["library", "cell_type", "type_of_list", "n_significant_terms_fdr_le_0_05"]
-        )
-    sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.tsv", sep="\t", index=False)
-    sig_counts.to_csv(OUT_DIR / "significant_counts_by_library.csv", index=False)
-
-    all_terms_txt = OUT_DIR / "go_bp_2023_2025_all_terms_table.txt"
-    significant_terms_txt = OUT_DIR / "go_bp_2023_2025_significant_terms_table.txt"
-    combined_all_terms_txt = OUT_DIR / "all_libraries_2023_2025_all_terms_table.txt"
-    combined_significant_terms_txt = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.txt"
-    significant_counts_txt = OUT_DIR / "significant_counts_by_library.txt"
-
-    # Write all gene lists to Excel file (one sheet per list)
-    gene_lists_for_excel: dict[str, set[str]] = {"background_genes": background_genes}
-    for ct, status_col in cell_type_columns:
-        unchanged_mask = _status_mask(df_status[status_col], "splicing unchanged")
-        diff_mask = _status_mask(df_status[status_col], "differentially spliced")
-        unchanged_genes = genes_series_to_set(df_status.loc[unchanged_mask, genes_col])
-        diff_genes = genes_series_to_set(df_status.loc[diff_mask, genes_col])
-        gene_lists_for_excel[f"{ct}_differentially_spliced"] = diff_genes
-        gene_lists_for_excel[f"{ct}_splicing_unchanged"] = unchanged_genes
-    gene_lists_for_excel["all_differentially_spliced_genes"] = all_diff_genes
-    gene_lists_for_excel["all_splicing_unchanged_genes"] = all_unchanged_genes
-    gene_lists_for_excel["primary_diff_only_genes"] = primary_diff_only_genes
-    gene_lists_for_excel["primary_unchanged_only_genes"] = primary_unchanged_only_genes
-
+    # Gene lists workbook with requested sheet order.
     gene_lists_excel = OUT_DIR / "gene_lists.xlsx"
-    write_gene_lists_to_excel(gene_lists_excel, gene_lists_for_excel)
+    write_gene_lists_to_excel(
+        gene_lists_excel,
+        background_genes,
+        su_genes,
+        ds_genes,
+    )
 
     print("Done. Results written to:")
     print(f"  {OUT_DIR}")
-    print("Final all-terms GO table:")
-    print(f"  {final_all_tsv}")
-    print("Final significant GO table:")
-    print(f"  {final_sig_tsv}")
-    print("Gene lists Excel file:")
+    print("Gene list workbook:")
     print(f"  {gene_lists_excel}")
-    all_terms_txt.write_text(go_all_table.to_string(index=False) + "\n")
-    significant_terms_txt.write_text(go_sig_table.to_string(index=False) + "\n")
-    combined_all_terms_txt.write_text(final_all_table.to_string(index=False) + "\n")
-    combined_significant_terms_txt.write_text(final_sig_table.to_string(index=False) + "\n")
-    significant_counts_txt.write_text(sig_counts.to_string(index=False) + "\n")
-    print("Saved full table-style outputs:")
-    print(f"  {all_terms_txt}")
-    print(f"  {significant_terms_txt}")
-    print(f"  {combined_all_terms_txt}")
-    print(f"  {combined_significant_terms_txt}")
-    print(f"  {significant_counts_txt}")
+    print("Result files:")
+    print(f"  {OUT_DIR / 'results_go_biological_process_2025.tsv'}")
+    print(f"  {OUT_DIR / 'results_hallmark.tsv'}")
+    print(f"  {OUT_DIR / 'results_reactome_2022.tsv'}")
+    print("Per-library workbooks:")
+    print(f"  {OUT_DIR / 'results_go_biological_process_2025.xlsx'}")
+    print(f"  {OUT_DIR / 'results_hallmark.xlsx'}")
+    print(f"  {OUT_DIR / 'results_reactome_2022.xlsx'}")
 
 
 if __name__ == "__main__":

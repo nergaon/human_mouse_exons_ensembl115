@@ -5,8 +5,8 @@ source /gpfs0/tals/projects/software/anaconda3/etc/profile.d/conda.sh
 conda activate leafcutter
 
 version=$1
-#AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_${version}.txt"
-AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_fibroblast_${version}.txt"
+AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_${version}.txt"
+#AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/AS_clusters_value_fibroblast_${version}.txt"
 #human mouse
 #leafcutter_folders=(
 #"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/CD4T"
@@ -17,7 +17,7 @@ AS_value="/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunct
 #"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE116177/Neut")
 
 #human mouse fibroblast
-leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_EMTAB5919H_EMTAB5919M/")
+#leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_EMTAB5919H_EMTAB5919M/")
 
 #human human
 #leafcutter_folders=(
@@ -29,12 +29,12 @@ leafcutter_folders=("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/
 #	"/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE115736_GSE60424/Neut")
 
 #mouse mouse
-#leafcutter_folders=(
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/CD4T"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/Cd8T"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/BCell"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/NK"
-#    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/Mono")
+leafcutter_folders=(
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/CD4T"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/Cd8T"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/BCell"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/NK"
+    "/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026/leafcutter_GSE116177_GSE180020/Mono")
 
 leafcutter_scripts="/gpfs0/tals/projects/software/leafcutter_0.2.9"
 
@@ -55,7 +55,7 @@ for leafcutter_folder in "${leafcutter_folders[@]}"; do
     threshold=2
   fi
   echo "$leafcutter_folder, $threshold"
-	$leafcutter_scripts/leafcutter/scripts/leafcutter_ds.R --num_threads 4 -i "$threshold"  -g "$threshold" --exon_file=/gpfs0/tals/projects/data/Transcriptomes/human_hg38/GCF_000001405.39_GRCh38.p13_genomic_leafcutter.txt.gz "$AS_value" groups_file.txt
+	#$leafcutter_scripts/leafcutter/scripts/leafcutter_ds.R --num_threads 4 -i "$threshold"  -g "$threshold" --exon_file=/gpfs0/tals/projects/data/Transcriptomes/human_hg38/GCF_000001405.39_GRCh38.p13_genomic_leafcutter.txt.gz "$AS_value" groups_file.txt
 done
 
 # Program:        regtools
