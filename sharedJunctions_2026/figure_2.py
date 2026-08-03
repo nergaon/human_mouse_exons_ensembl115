@@ -65,15 +65,25 @@ CELL_TYPES_LEFT = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"]
 # UpSet logic uses the five main HN6 immune cell types exactly as requested.
 CELL_TYPES_UPSET = ["CD4T", "CD8T", "NveB", "NK", "Mono"]
 
+CELL_TYPE_DISPLAY = {
+    "CD4T": "T4",
+    "CD8T": "T8",
+    "NveB": "B",
+    "NK": "NK",
+    "Mono": "Mo",
+    "Neut": "Neut",
+    "Fibroblast": "Fibroblasts",
+}
+
 # Palette aligned with existing script
 COLOR_SIG = "#74c476"          # green
 COLOR_UNCH = "#9ecae1"         # light blue
-COLOR_NOINFO = "#f5f5f5"       # off-white
+COLOR_NOINFO = "#d3d3d3"       # light gray
 COLOR_EDGE = "#4d4d4d"
 COLOR_UPSET_BAR = "#9e9e9e"    # gray bars for UpSet top histograms
 LOW_HATCH = ".."
 
-FONT_FAMILY = "DejaVu Sans"
+FONT_FAMILY = "Liberation Sans"
 FONT_SIZE = 7.0
 
 
@@ -234,10 +244,11 @@ def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
         CELL_TYPES_UPSET + ["Neut", "Fibroblast"],
         CELL_TYPES_UPSET,
     ]
+    _upset_disp = [CELL_TYPE_DISPLAY.get(ct, ct) for ct in CELL_TYPES_UPSET]
     panel_display_labels = [
-        CELL_TYPES_UPSET,
-        CELL_TYPES_UPSET + ["", "Fibroblast"],
-        CELL_TYPES_UPSET,
+        _upset_disp,
+        _upset_disp + ["", "Fibroblasts"],
+        _upset_disp,
     ]
 
     for panel_idx, (ax, (_, _, sum_table)) in enumerate(zip(axes, PAIR_DIRS)):
@@ -275,12 +286,12 @@ def _draw_top_three_panels(axes: list[plt.Axes]) -> None:
         rotation = 35 if panel_idx == 1 else 0
         ha = "right" if panel_idx == 1 else "center"
         ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
-        ax.tick_params(axis="x", pad=1.5)
+        ax.tick_params(axis="x", pad=1.5, length=0)
         ax.margins(x=0.0)
         ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
         ax.set_ylim(0, 100)
 
-    axes[0].set_ylabel("Percent of success clusters (%)")
+    axes[0].set_ylabel("Comparable alternative splicing events")
     for idx, ax in enumerate(axes):
         if idx == 0:
             ax.tick_params(axis="y", which="both", left=True, labelleft=True)
@@ -302,10 +313,11 @@ def _draw_top_three_panels_possible_as(axes: list[plt.Axes]) -> None:
         ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblast"],
         ["CD4T", "CD8T", "NveB", "NK", "Mono"],
     ]
+    _upset_disp = [CELL_TYPE_DISPLAY.get(ct, ct) for ct in CELL_TYPES_UPSET]
     panel_display_labels = [
-        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
-        ["CD4T", "CD8T", "NveB", "NK", "Mono", "", "Fibroblast"],
-        ["CD4T", "CD8T", "NveB", "NK", "Mono"],
+        _upset_disp,
+        _upset_disp + ["", "Fibroblasts"],
+        _upset_disp,
     ]
 
     for panel_idx, (ax, (_, _, sum_table)) in enumerate(zip(axes, PAIR_DIRS)):
@@ -348,12 +360,12 @@ def _draw_top_three_panels_possible_as(axes: list[plt.Axes]) -> None:
         rotation = 35 if panel_idx == 1 else 0
         ha = "right" if panel_idx == 1 else "center"
         ax.set_xticklabels(display_labels, rotation=rotation, ha=ha)
-        ax.tick_params(axis="x", pad=1.5)
+        ax.tick_params(axis="x", pad=1.5, length=0)
         ax.margins(x=0.0)
         ax.set_xlim(-0.5, len(display_cell_types) - 0.5)
         ax.set_ylim(0, 100)
 
-    axes[0].set_ylabel(f"Percent of possible AS clusters (n={POSSIBLE_AS_CLUSTERS})")
+    axes[0].set_ylabel("Comparable alternative splicing events")
     for idx, ax in enumerate(axes):
         if idx == 0:
             ax.tick_params(axis="y", which="both", left=True, labelleft=True)
@@ -384,7 +396,7 @@ def _compute_stacked_pct_arrays(full_status_df: pd.DataFrame) -> tuple[list[str]
 
     Neut and Fibroblast are kept as placeholders with invisible (zero-height) bars.
     """
-    labels = ["CD4T", "CD8T", "NveB", "NK", "Mono", "Neut", "Fibroblasts"]
+    labels = ["T4", "T8", "B", "NK", "Mo", "Neut", "Fibroblasts"]
 
     n = len(CELL_TYPES_LEFT)
     v_high_unch = np.zeros(n, dtype=float)
@@ -477,7 +489,7 @@ def _draw_upset_on_subspec(
     x = np.arange(len(combos))
 
     ax_bar.bar(x, counts, color=COLOR_UPSET_BAR)
-    ax_bar.set_ylabel("Clusters")
+    ax_bar.set_ylabel("Alternative splicing events")
     ax_bar.set_ylim(0, max(counts) * 1.18)
     ax_bar.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
     ax_bar.tick_params(axis="x", labelbottom=False)
@@ -502,10 +514,11 @@ def _draw_upset_on_subspec(
             )
 
     ax_mat.set_yticks([y_map[ct] for ct in reversed(ct_cols)])
-    ax_mat.set_yticklabels(list(reversed(ct_cols)), fontsize=FONT_SIZE)
+    ax_mat.set_yticklabels([CELL_TYPE_DISPLAY.get(ct, ct) for ct in reversed(ct_cols)], fontsize=FONT_SIZE)
     ax_mat.set_ylim(-0.7, len(ct_cols) - 0.3)
-    ax_mat.set_xlabel("Combinations (sorted by size)")
+    ax_mat.set_xlabel("Cell type combinations (sorted by size)")
     ax_mat.set_xticklabels([])
+    ax_mat.tick_params(axis="x", length=0)
     ax_mat.grid(axis="x", linestyle=":", linewidth=0.4, alpha=0.35)
 
 
@@ -676,6 +689,17 @@ def _prepare_panel_g_data(
     if df_h.empty:
         return df_h, immune_cols, np.zeros((0, len(immune_cols))), np.zeros((0, 1)), []
 
+    # Remove rows where the cluster only has status in fibroblasts (i.e., no high-confidence status in any immune cell)
+    immune_high_mask = pd.DataFrame(False, index=df_h.index, columns=immune_cols)
+    for ct in immune_cols:
+        if ct in df_h.columns:
+            immune_high_mask[ct] = df_h[ct].isin({STATUS_HIGH_CHANGE, STATUS_HIGH_CONSERVED})
+    has_immune_high = immune_high_mask.any(axis=1)
+    df_h = df_h[has_immune_high].copy()
+
+    if df_h.empty:
+        return df_h, immune_cols, np.zeros((0, len(immune_cols))), np.zeros((0, 1)), []
+
     n_selected = np.zeros(len(df_h), dtype=int)
     for ct in ct_cols:
         if ct == "Fibroblast":
@@ -771,7 +795,7 @@ def _draw_panel_g_split_heatmaps(
 
     ax_immune.pcolormesh(mat_immune, cmap=cmap, norm=norm)
     ax_immune.set_xticks(np.arange(len(immune_cols)) + 0.5)
-    ax_immune.set_xticklabels(immune_cols, fontsize=FONT_SIZE, rotation=45, ha="left")
+    ax_immune.set_xticklabels([CELL_TYPE_DISPLAY.get(ct, ct) for ct in immune_cols], fontsize=FONT_SIZE, rotation=45, ha="left")
     ax_immune.xaxis.set_ticks_position("top")
     ax_immune.xaxis.set_label_position("top")
 
@@ -788,7 +812,7 @@ def _draw_panel_g_split_heatmaps(
 
     ax_fibro.pcolormesh(fibro_mat, cmap=cmap, norm=norm)
     ax_fibro.set_xticks([0.5])
-    ax_fibro.set_xticklabels(["Fibroblast"], fontsize=FONT_SIZE, rotation=45, ha="left")
+    ax_fibro.set_xticklabels(["Fibroblasts"], fontsize=FONT_SIZE, rotation=45, ha="left")
     ax_fibro.xaxis.set_ticks_position("top")
     ax_fibro.xaxis.set_label_position("top")
     ax_fibro.tick_params(axis="y", which="both", left=False, labelleft=False)
@@ -812,7 +836,7 @@ def _draw_middle_panel(ax: plt.Axes, full_status_df: pd.DataFrame) -> None:
     ax.bar(x, arr["noinfo"], color=COLOR_NOINFO, edgecolor=bar_edge, linewidth=0.5, label="not informative")
     ax.bar(x, arr["high_unch"], bottom=b2, color=COLOR_UNCH, edgecolor=bar_edge, linewidth=0.5, label="high confidence splicing unchanged")
     ax.bar(x, arr["low_unch"], bottom=b3, color=COLOR_UNCH, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5,
-        label="low confidence splicing unchanged")
+        label="Splicing unchanged, low confidence")
     ax.bar(x, arr["high_sig"], bottom=b4, color=COLOR_SIG, edgecolor=bar_edge, linewidth=0.5, label="high confidence differentially spliced")
     ax.bar(x, arr["low_sig"], bottom=b5, color=COLOR_SIG, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5,
         label="low confidence differentially spliced")
@@ -820,33 +844,33 @@ def _draw_middle_panel(ax: plt.Axes, full_status_df: pd.DataFrame) -> None:
     ax.set_xticks(x)
     labels_display = labels[:5] + ["", ""]
     ax.set_xticklabels(labels_display, fontsize=FONT_SIZE, rotation=35, ha="right")
-    ax.tick_params(axis="x", pad=1.5)
+    ax.tick_params(axis="x", pad=1.5, length=0)
     # Tight horizontal margins keep category centers visually aligned to the
     # middle segment above in most PDF viewers.
     ax.margins(x=0.0)
     ax.set_xlim(-0.5, len(labels) - 0.5)
     ax.set_ylim(0, 100)
-    ax.set_ylabel("Percent of success clusters (%)")
+    ax.set_ylabel("Comparable alternative splicing events")
 
     # Keep a single legend in the whole page: this panel only.
     low_unch_handle = Patch(
         facecolor=COLOR_UNCH,
         edgecolor=COLOR_EDGE,
         linewidth=0.5,
-        label="low confidence splicing unchanged",
+        label="Splicing unchanged, low confidence",
     )
     low_sig_handle = Patch(
         facecolor=COLOR_SIG,
         edgecolor=COLOR_EDGE,
         linewidth=0.5,
-        label="low confidence differentially spliced",
+        label="Differentially spliced, low confidence",
     )
 
     legend_handles = [
-        Patch(facecolor=COLOR_NOINFO, edgecolor=bar_edge, label="not informative"),
-        Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="high confidence splicing unchanged"),
+        Patch(facecolor=COLOR_NOINFO, edgecolor=bar_edge, label="Not informative"),
+        Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="Splicing unchanged, high confidence"),
         low_unch_handle,
-        Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="high confidence differentially spliced"),
+        Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="Differentially spliced, high confidence"),
         low_sig_handle,
     ]
     ax.legend(
@@ -906,33 +930,33 @@ def _draw_middle_panel_all_clusters(ax: plt.Axes, full_status_df: pd.DataFrame) 
     ax.bar(x, v_low_sig, bottom=b6, color=COLOR_SIG, hatch=LOW_HATCH, edgecolor=COLOR_EDGE, linewidth=0.5)
 
     ax.set_xticks(x)
-    labels_display = cts[:5] + ["", ""]
+    labels_display = [CELL_TYPE_DISPLAY.get(ct, ct) for ct in cts[:5]] + ["", ""]
     ax.set_xticklabels(labels_display, rotation=35, ha="right")
-    ax.tick_params(axis="x", pad=1.5)
+    ax.tick_params(axis="x", pad=1.5, length=0)
     ax.margins(x=0.0)
     ax.set_xlim(-0.5, len(cts) - 0.5)
     ax.set_ylim(0, max(POSSIBLE_AS_CLUSTERS, 1) * 1.02)
-    ax.set_ylabel("Clusters")
+    ax.set_ylabel("Comparable alternative splicing events")
 
     low_unch_handle = Patch(
         facecolor=COLOR_UNCH,
         edgecolor=COLOR_EDGE,
         linewidth=0.5,
-        label="low confidence splicing unchanged",
+        label="Splicing unchanged, low confidence",
     )
     low_sig_handle = Patch(
         facecolor=COLOR_SIG,
         edgecolor=COLOR_EDGE,
         linewidth=0.5,
-        label="low confidence differentially spliced",
+        label="Differentially spliced, low confidence",
     )
 
     legend_handles = [
         Patch(facecolor="#f0f0f0", edgecolor=bar_edge, label="not success"),
         Patch(facecolor=COLOR_NOINFO, edgecolor="#7f7f7f", label="not informative"),
-        Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="high confidence splicing unchanged"),
+        Patch(facecolor=COLOR_UNCH, edgecolor=bar_edge, label="Splicing unchanged, high confidence"),
         low_unch_handle,
-        Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="high confidence differentially spliced"),
+        Patch(facecolor=COLOR_SIG, edgecolor=bar_edge, label="Differentially spliced, high confidence"),
         low_sig_handle,
     ]
     ax.legend(
@@ -1040,7 +1064,7 @@ def _draw_upset_from_summary_status(
     x = np.arange(len(combos))
 
     ax_bar.bar(x, counts, color=COLOR_UPSET_BAR)
-    ax_bar.set_ylabel("Clusters")
+    ax_bar.set_ylabel("Alternative splicing events")
     ax_bar.set_ylim(0, max(counts) * 1.18)
     ax_bar.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
     ax_bar.tick_params(axis="x", labelbottom=False)
@@ -1060,10 +1084,11 @@ def _draw_upset_from_summary_status(
             ax_mat.plot([i, i], [ys[0], ys[-1]], color=COLOR_SIG if status_label == "sig" else COLOR_UNCH, linewidth=1.3)
 
     ax_mat.set_yticks([y_map[ct] for ct in reversed(ct_cols)])
-    ax_mat.set_yticklabels(list(reversed(ct_cols)), fontsize=FONT_SIZE)
+    ax_mat.set_yticklabels([CELL_TYPE_DISPLAY.get(ct, ct) for ct in reversed(ct_cols)], fontsize=FONT_SIZE)
     ax_mat.set_ylim(-0.7, len(ct_cols) - 0.3)
-    ax_mat.set_xlabel("Combinations (sorted by size)")
+    ax_mat.set_xlabel("Cell type combinations (sorted by size)")
     ax_mat.set_xticklabels([])
+    ax_mat.tick_params(axis="x", length=0)
     ax_mat.grid(axis="x", linestyle=":", linewidth=0.4, alpha=0.35)
 
 

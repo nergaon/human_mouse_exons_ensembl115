@@ -6,7 +6,7 @@ Requirements implemented:
 - Top panel: Counts, bottom panel: PSI.
 - Title: gene name only (no p-value, no deltapsi).
 - Legend intron format: chr:start-end (not chr:start:end).
-- Cell-group order on x-axis: Mono, NveB, NK, CD8, CD4, [small gap], Fibroblast (if present).
+- Cell-group order on x-axis: CD4, CD8, NveB, NK, Mono, [small gap], Fibroblast (if present).
 - Output format: PDF only.
 """
 
@@ -16,7 +16,10 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import matplotlib
 import matplotlib.pyplot as plt
+
+matplotlib.rcParams['font.family'] = 'Liberation Sans'
 import numpy as np
 import pandas as pd
 from matplotlib.patches import Patch
@@ -29,19 +32,27 @@ GENE_TABLE_FIBRO = BASE / "leafcutter_EMTAB5919H_EMTAB5919M" / "clusters_sum_tab
 OUTPUT_DIR = BASE / "genes_figs_selected_clusters"
 
 TARGET_CLUSTERS = [
-    #"chr21:clu_46835",
-    #"chr9:clu_81561",
-    #"chr9:clu_80597",
-    #"chr8:clu_76270",
-    #"clur3:clu_57873",
-    #"chr6:clu_68620",
-    #"chr3:clu_60710",
-    #"chr3:clu_60717",
+    "chr21:clu_46835",
+    "chr9:clu_81561",
+    "chr9:clu_80597",
+    "chr8:clu_76270",
+    "clur3:clu_57873",
+    "chr6:clu_68620",
+    "chr3:clu_60710",
+    "chr3:clu_60717",
     "chr14:clu_15672"
 ]
 
-CELL_GROUP_ORDER = ["Mono", "NveB", "NK", "CD8", "CD4", "Fibroblast"]
-IMMUNE_CELL_GROUPS = ["Mono", "NveB", "NK", "CD8", "CD4"]
+CELL_GROUP_ORDER = ["CD4", "CD8", "NveB", "NK", "Mono", "Fibroblast"]
+IMMUNE_CELL_GROUPS = ["CD4", "CD8", "NveB", "NK", "Mono"]
+CELL_GROUP_DISPLAY = {
+    "CD4": "T4",
+    "CD8": "T8",
+    "NveB": "B",
+    "NK": "NK",
+    "Mono": "Mo",
+    "Fibroblast": "Fibroblasts",
+}
 DATASET_ORDER = ["GSE180020", "GSE116177", "GSE115736", "GSE60424", "MM", "HS"]
 DATASET_LABELS = {
     "GSE180020": "M2",
@@ -318,13 +329,13 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
     # Top: counts
     if segments:
         centers = [float(np.mean(positions[s:e + 1])) for _, s, e in segments]
-        group_labels = [grp for grp, _, _ in segments]
+        group_labels = [CELL_GROUP_DISPLAY.get(grp, grp) for grp, _, _ in segments]
         ax_top.set_xticks(centers)
         ax_top.set_xticklabels(group_labels, fontsize=7, rotation=0, ha="center")
     else:
         ax_top.set_xticks([])
     ax_top.tick_params(axis="x", length=0, labelbottom=True)
-    ax_top.set_ylabel("Counts")
+    ax_top.set_ylabel("JSR counts")
 
     # Bottom: PSI
     ax_bottom.set_xticks([center for _, _, _, center in ds_blocks])
@@ -332,6 +343,17 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
     ax_bottom.tick_params(axis="x", length=0)
     ax_bottom.set_ylabel("PSI")
     ax_bottom.set_ylim(0, 1)
+
+    # Dashed vertical lines between different datasets (within cell groups).
+    for i in range(1, len(samples_sorted)):
+        prev_ds = extract_dataset_id(samples_sorted[i - 1])
+        cur_ds = extract_dataset_id(samples_sorted[i])
+        prev_cell = _sample_cell_group(samples_sorted[i - 1])
+        cur_cell = _sample_cell_group(samples_sorted[i])
+        if cur_ds != prev_ds and cur_cell == prev_cell:
+            x_sep = (positions[i - 1] + positions[i]) / 2.0
+            ax_top.axvline(x_sep, color="#aaaaaa", linewidth=0.7, linestyle="--", zorder=0)
+            ax_bottom.axvline(x_sep, color="#aaaaaa", linewidth=0.7, linestyle="--", zorder=0)
 
     # Separate cell-type blocks with vertical guide lines.
     for i, (grp, s, e) in enumerate(segments[:-1]):
@@ -355,7 +377,7 @@ def _plot_cluster(df_cluster: pd.DataFrame, sample_cols: List[str], gene_title: 
     safe_name = re.sub(r"_+", "_", safe_name)
 
     out_pdf = out_dir / f"{safe_name}_{cluster_id.replace(':', '_')}.pdf"
-    fig.savefig(out_pdf, bbox_inches="tight")
+    fig.savefig(out_pdf, bbox_inches="tight", dpi=300)
     plt.close("all")
 
 

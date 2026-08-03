@@ -22,17 +22,18 @@ import re
 import math
 
 import pandas as pd
+from gseapy import Msigdb
 
 
 BASE = Path("/gpfs0/tals/projects/Analysis/human_mouse_exons/ensembl115/sharedJunctions_2026")
 FILE_XLSX = BASE / "leafcutter_GSE115736_GSE116177" / "unique_sig_clusters_HN6.xlsx"
 SHEET_ALL_CLUSTER_STATUS = "all_cluster_status"
-OUT_DIR = BASE / "go_bp_2025_with_fibro_neu_results"
+OUT_DIR = BASE / "go_bp_2025"
 ENRICHMENT_FILE_SUFFIX = "_GO_BP_enrichment.tsv"
 
 THRESHOLD = 0.05
 ENRICHR_TIMEOUT_SEC = 180
-GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025",)
+GO_LIBRARIES: tuple[str, ...] = ("GO_Biological_Process_2025", "hallmark", "Reactome_2022")
 
 REQUESTED_CELL_TYPES: tuple[str, ...] = (
     "CD4T",
@@ -40,8 +41,6 @@ REQUESTED_CELL_TYPES: tuple[str, ...] = (
     "NveB",
     "NK",
     "Mono",
-    "Fibroblast",
-    "Neu",
 )
 
 PRIMARY_IMMUNE_CELL_TYPES: tuple[str, ...] = ("CD4T", "CD8T", "NveB", "NK", "Mono")
@@ -93,10 +92,11 @@ def split_genes(genes_text: str) -> list[str]:
     text = str(genes_text).strip()
     if not text or text.lower() == "nan":
         return []
-    parts = re.split(r"[;,|]", text)
+    parts = re.split(r"[;|]", text)
     genes = []
     for p in parts:
-        g = p.strip()
+        # Some entries are "GENE,LOC..." aliases; keep only the first gene symbol.
+        g = p.split(",", 1)[0].strip()
         if g and g.lower() != "nan":
             genes.append(g)
     return genes
@@ -130,40 +130,57 @@ def _go_worker(
     try:
         import gseapy as gp
 
-        enr = gp.enrichr(
-            gene_list=genes,
-            gene_sets=library,
-            organism="human",
-            outdir=None,
-            background=background,
-            cutoff=1.0,
-            no_plot=True,
-        )
+        # Handle Hallmark via Msigdb
+        if library.lower() == "hallmark":
+            try:
+                msig = Msigdb()
+                gmt = msig.get_gmt(category="h.all", dbver="2024.1.Hs")
+                results = gp.enrich(
+                    gene_list=genes,
+                    gene_sets=gmt,
+                    background=background,
+                    outdir=None,
+                )
+            except Exception as exc:
+                queue.put({"status": "error", "message": f"Hallmark loading failed: {str(exc)}"})
+                return
+        else:
+            # Handle other libraries via Enrichr
+            enr = gp.enrichr(
+                gene_list=genes,
+                gene_sets=library,
+                organism="human",
+                outdir=None,
+                background=background,
+                cutoff=1.0,
+                no_plot=True,
+            )
+            results = enr
 
-        results = getattr(enr, "results", None)
-        if not isinstance(results, pd.DataFrame):
-            results = pd.DataFrame() if results is None else pd.DataFrame(results)
+        result_df = getattr(results, "results", None)
+        if not isinstance(result_df, pd.DataFrame):
+            result_df = pd.DataFrame() if result_df is None else pd.DataFrame(result_df)
 
-        if isinstance(results, pd.DataFrame) and not results.empty:
+        if isinstance(result_df, pd.DataFrame) and not result_df.empty:
             req_cols = {"Overlap", "Odds Ratio"}
-            if req_cols.issubset(set(results.columns)):
-                results["Enrichment Ratio"] = pd.to_numeric(results["Odds Ratio"], errors="coerce")
+            if req_cols.issubset(set(result_df.columns)):
+                result_df["Enrichment Ratio"] = pd.to_numeric(result_df["Odds Ratio"], errors="coerce")
 
             # Remove terms with infinite ratio values; these come from zero denominators
             # in odds-ratio calculations and are not informative for ranking.
-            drop_mask = pd.Series(False, index=results.index)
+            drop_mask = pd.Series(False, index=result_df.index)
             for ratio_col in ("Odds Ratio", "Enrichment Ratio", "odds_ratio", "enrichment_ratio"):
-                if ratio_col in results.columns:
-                    vals = pd.to_numeric(results[ratio_col], errors="coerce")
+                if ratio_col in result_df.columns:
+                    vals = pd.to_numeric(result_df[ratio_col], errors="coerce")
                     drop_mask = drop_mask | (~vals.isna() & ~vals.map(math.isfinite))
             if drop_mask.any():
-                results = results.loc[~drop_mask].copy()
+                result_df = result_df.loc[~drop_mask].copy()
 
-            if results.empty:
+            if result_df.empty:
                 queue.put({"status": "empty"})
             else:
-                results.to_csv(out_tsv, sep="\t", index=False)
-                queue.put({"status": "ok", "rows": int(len(results))})
+                result_df.to_csv(out_tsv, sep="\t", index=False)
+                queue.put({"status": "ok", "rows": int(len(result_df))})
         else:
             queue.put({"status": "empty"})
     except Exception as exc:
@@ -309,16 +326,63 @@ def build_go_table(rows_meta: list[dict[str, str]], out_dir: Path, significant_o
                     "go_term": row[term_col],
                     "p_value": row[pval_col],
                     "enrichment_ratio": enr_val,
-                    "fdr": row[fdr_col],
+                    "source_fdr": row[fdr_col],
                 }
             )
 
     if not out_rows:
-        return pd.DataFrame(columns=["library", "cell_type", "type_of_list", "go_term", "p_value", "enrichment_ratio", "fdr"])
+        return pd.DataFrame(
+            columns=[
+                "library",
+                "cell_type",
+                "type_of_list",
+                "go_term",
+                "p_value",
+                "enrichment_ratio",
+                "source_fdr",
+            ]
+        )
 
     out_df = pd.DataFrame(out_rows)
-    out_df = out_df.sort_values(["library", "cell_type", "type_of_list", "fdr", "p_value", "go_term"], kind="stable").reset_index(drop=True)
+    out_df = out_df.sort_values(
+        ["library", "cell_type", "type_of_list", "source_fdr", "p_value", "go_term"],
+        kind="stable",
+    ).reset_index(drop=True)
     return out_df
+
+
+def _bh_fdr(pvals: pd.Series) -> pd.Series:
+    """Benjamini-Hochberg FDR correction for a single family of tests."""
+    numeric = pd.to_numeric(pvals, errors="coerce")
+    valid = [(idx, float(p)) for idx, p in numeric.items() if pd.notna(p)]
+    out = pd.Series(pd.NA, index=pvals.index, dtype="Float64")
+    if not valid:
+        return out
+
+    valid.sort(key=lambda x: x[1])
+    m = len(valid)
+    raw_adj: list[float] = []
+    for i, (_, p) in enumerate(valid, start=1):
+        raw_adj.append(min(1.0, (p * m) / i))
+
+    monotone_adj = [1.0] * m
+    min_so_far = 1.0
+    for i in range(m - 1, -1, -1):
+        min_so_far = min(min_so_far, raw_adj[i])
+        monotone_adj[i] = min_so_far
+
+    for (idx, _), adj in zip(valid, monotone_adj):
+        out.loc[idx] = adj
+    return out
+
+
+def apply_library_specific_fdr(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["fdr"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
+    for library, grp in out.groupby("library", sort=False):
+        _ = library
+        out.loc[grp.index, "fdr"] = _bh_fdr(grp["p_value"])
+    return out
 
 
 def _collect_run_errors(rows_meta: list[dict[str, str]], out_dir: Path) -> list[str]:
@@ -335,6 +399,16 @@ def _collect_run_errors(rows_meta: list[dict[str, str]], out_dir: Path) -> list[
                 errors.append(f"{meta['label']}: {msg}")
                 break
     return errors
+
+
+def write_gene_lists_to_excel(excel_path: Path, gene_lists: dict[str, set[str]]) -> None:
+    """Write all gene lists to an Excel file, one sheet per list."""
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        for sheet_name, genes in sorted(gene_lists.items()):
+            # Excel sheet names have a 31-character limit; truncate if necessary
+            safe_sheet_name = sheet_name[:31] if len(sheet_name) <= 31 else sheet_name[:28] + "..."
+            df = pd.DataFrame({"gene": sorted(genes)}) if genes else pd.DataFrame(columns=["gene"])
+            df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
 
 
 def main() -> None:
@@ -478,16 +552,46 @@ def main() -> None:
             f"Error preview:\n{preview}"
         )
 
+    final_all_table = apply_library_specific_fdr(final_all_table)
+    final_all_table = final_all_table.sort_values(
+        ["library", "cell_type", "type_of_list", "fdr", "p_value", "go_term"],
+        kind="stable",
+    ).reset_index(drop=True)
+
+    combined_all_tsv = OUT_DIR / "all_libraries_2023_2025_all_terms_table.tsv"
+    combined_all_csv = OUT_DIR / "all_libraries_2023_2025_all_terms_table.csv"
+    final_all_table.to_csv(combined_all_tsv, sep="\t", index=False)
+    final_all_table.to_csv(combined_all_csv, index=False)
+
+    final_sig_table = final_all_table[pd.to_numeric(final_all_table["fdr"], errors="coerce") <= THRESHOLD].copy()
+    combined_sig_tsv = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.tsv"
+    combined_sig_csv = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.csv"
+    final_sig_table.to_csv(combined_sig_tsv, sep="\t", index=False)
+    final_sig_table.to_csv(combined_sig_csv, index=False)
+
+    go_library_name = "GO_Biological_Process_2025"
+    go_all_table = final_all_table[final_all_table["library"] == go_library_name].copy()
+    go_sig_table = final_sig_table[final_sig_table["library"] == go_library_name].copy()
+
     final_all_tsv = OUT_DIR / "go_bp_2023_2025_all_terms_table.tsv"
     final_all_csv = OUT_DIR / "go_bp_2023_2025_all_terms_table.csv"
-    final_all_table.to_csv(final_all_tsv, sep="\t", index=False)
-    final_all_table.to_csv(final_all_csv, index=False)
+    go_all_table.to_csv(final_all_tsv, sep="\t", index=False)
+    go_all_table.to_csv(final_all_csv, index=False)
 
-    final_sig_table = build_go_table(rows_meta, OUT_DIR, significant_only=True)
     final_sig_tsv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.tsv"
     final_sig_csv = OUT_DIR / "go_bp_2023_2025_significant_terms_table.csv"
-    final_sig_table.to_csv(final_sig_tsv, sep="\t", index=False)
-    final_sig_table.to_csv(final_sig_csv, index=False)
+    go_sig_table.to_csv(final_sig_tsv, sep="\t", index=False)
+    go_sig_table.to_csv(final_sig_csv, index=False)
+
+    for library in GO_LIBRARIES:
+        lib_all = final_all_table[final_all_table["library"] == library].copy()
+        lib_sig = final_sig_table[final_sig_table["library"] == library].copy()
+        lib_stem = library.lower().replace(" ", "_")
+
+        lib_all.to_csv(OUT_DIR / f"{lib_stem}_all_terms_table.tsv", sep="\t", index=False)
+        lib_all.to_csv(OUT_DIR / f"{lib_stem}_all_terms_table.csv", index=False)
+        lib_sig.to_csv(OUT_DIR / f"{lib_stem}_significant_terms_table.tsv", sep="\t", index=False)
+        lib_sig.to_csv(OUT_DIR / f"{lib_stem}_significant_terms_table.csv", index=False)
 
     if not final_sig_table.empty:
         sig_counts = (
@@ -505,7 +609,26 @@ def main() -> None:
 
     all_terms_txt = OUT_DIR / "go_bp_2023_2025_all_terms_table.txt"
     significant_terms_txt = OUT_DIR / "go_bp_2023_2025_significant_terms_table.txt"
+    combined_all_terms_txt = OUT_DIR / "all_libraries_2023_2025_all_terms_table.txt"
+    combined_significant_terms_txt = OUT_DIR / "all_libraries_2023_2025_significant_terms_table.txt"
     significant_counts_txt = OUT_DIR / "significant_counts_by_library.txt"
+
+    # Write all gene lists to Excel file (one sheet per list)
+    gene_lists_for_excel: dict[str, set[str]] = {"background_genes": background_genes}
+    for ct, status_col in cell_type_columns:
+        unchanged_mask = _status_mask(df_status[status_col], "splicing unchanged")
+        diff_mask = _status_mask(df_status[status_col], "differentially spliced")
+        unchanged_genes = genes_series_to_set(df_status.loc[unchanged_mask, genes_col])
+        diff_genes = genes_series_to_set(df_status.loc[diff_mask, genes_col])
+        gene_lists_for_excel[f"{ct}_differentially_spliced"] = diff_genes
+        gene_lists_for_excel[f"{ct}_splicing_unchanged"] = unchanged_genes
+    gene_lists_for_excel["all_differentially_spliced_genes"] = all_diff_genes
+    gene_lists_for_excel["all_splicing_unchanged_genes"] = all_unchanged_genes
+    gene_lists_for_excel["primary_diff_only_genes"] = primary_diff_only_genes
+    gene_lists_for_excel["primary_unchanged_only_genes"] = primary_unchanged_only_genes
+
+    gene_lists_excel = OUT_DIR / "gene_lists.xlsx"
+    write_gene_lists_to_excel(gene_lists_excel, gene_lists_for_excel)
 
     print("Done. Results written to:")
     print(f"  {OUT_DIR}")
@@ -513,12 +636,18 @@ def main() -> None:
     print(f"  {final_all_tsv}")
     print("Final significant GO table:")
     print(f"  {final_sig_tsv}")
-    all_terms_txt.write_text(final_all_table.to_string(index=False) + "\n")
-    significant_terms_txt.write_text(final_sig_table.to_string(index=False) + "\n")
+    print("Gene lists Excel file:")
+    print(f"  {gene_lists_excel}")
+    all_terms_txt.write_text(go_all_table.to_string(index=False) + "\n")
+    significant_terms_txt.write_text(go_sig_table.to_string(index=False) + "\n")
+    combined_all_terms_txt.write_text(final_all_table.to_string(index=False) + "\n")
+    combined_significant_terms_txt.write_text(final_sig_table.to_string(index=False) + "\n")
     significant_counts_txt.write_text(sig_counts.to_string(index=False) + "\n")
     print("Saved full table-style outputs:")
     print(f"  {all_terms_txt}")
     print(f"  {significant_terms_txt}")
+    print(f"  {combined_all_terms_txt}")
+    print(f"  {combined_significant_terms_txt}")
     print(f"  {significant_counts_txt}")
 
 
